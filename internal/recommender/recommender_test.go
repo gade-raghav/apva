@@ -31,12 +31,13 @@ func TestSizeResource(t *testing.T) {
 		{"right-sized within tolerance", 0.25, 0.22, ActionOK, 0.25},
 		{"using more than requested", 0.25, 0.4, ActionUpsize, 0.46},
 		{"no request", 0, 0.1, ActionSet, 0.115},
-		{"no data", 1, 0, ActionNoData, 1},
 		{"floor applied", 1, 0.001, ActionDownsize, 0.01},
+		{"completely idle (zero usage) is downsized, not no-data", 1, 0, ActionDownsize, 0.01},
+		{"tiny request above real need is left alone despite floor", 0.005, 0.001, ActionOK, 0.005},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sizeResource(tt.cur, tt.p95, cfg.MinCPUCores, cfg, roundCPU)
+			got := sizeResource(tt.cur, tt.p95, true, cfg.MinCPUCores, cfg, roundCPU)
 			if got.Action != tt.wantAction {
 				t.Errorf("action = %s, want %s", got.Action, tt.wantAction)
 			}
@@ -44,6 +45,21 @@ func TestSizeResource(t *testing.T) {
 				t.Errorf("recommended = %v, want ~%v", got.Recommended, tt.wantRec)
 			}
 		})
+	}
+}
+
+func TestNoData(t *testing.T) {
+	got := sizeResource(1, 0, false, 0.01, DefaultConfig(), roundCPU)
+	if got.Action != ActionNoData || got.Recommended != 1 {
+		t.Fatalf("got %+v, want no-data keeping current", got)
+	}
+}
+
+func TestTinyMemoryRequestNotUpsizedByFloor(t *testing.T) {
+	// Seen in e2e: 16Mi request, ~0.4Mi used. The 32Mi floor must not trigger "upsize".
+	got := sizeResource(16*mi, 0.36*mi, true, DefaultConfig().MinMemBytes, DefaultConfig(), roundMem)
+	if got.Action != ActionOK {
+		t.Fatalf("action = %s, want ok", got.Action)
 	}
 }
 
@@ -55,7 +71,7 @@ func TestRoundMem(t *testing.T) {
 
 func TestDownsizeAndSavings(t *testing.T) {
 	w := &collector.WorkloadUsage{Key: key("api"), Replicas: 3,
-		CPURequestCores: 1, CPUP95Cores: 0.2, MemRequestBytes: 1024 * mi, MemP95Bytes: 300 * mi}
+		HasCPUMetrics: true, HasMemMetrics: true, CPURequestCores: 1, CPUP95Cores: 0.2, MemRequestBytes: 1024 * mi, MemP95Bytes: 300 * mi}
 	r := Recommend(snap([]*collector.WorkloadUsage{w}), DefaultConfig())[0]
 	if r.CPU.Action != ActionDownsize || r.Memory.Action != ActionDownsize {
 		t.Fatalf("want downsize, got cpu=%s mem=%s", r.CPU.Action, r.Memory.Action)
@@ -70,7 +86,7 @@ func TestDownsizeAndSavings(t *testing.T) {
 
 func TestTrafficGrowthHoldsDownsize(t *testing.T) {
 	w := &collector.WorkloadUsage{Key: key("search"), Replicas: 1,
-		CPURequestCores: 2, CPUP95Cores: 0.4, MemRequestBytes: 2048 * mi, MemP95Bytes: 700 * mi}
+		HasCPUMetrics: true, HasMemMetrics: true, CPURequestCores: 2, CPUP95Cores: 0.4, MemRequestBytes: 2048 * mi, MemP95Bytes: 700 * mi}
 	e := collector.Edge{From: key("frontend"), To: key("search"), RatePerSec: 30, RecentRatePerSec: 55}
 	r := Recommend(snap([]*collector.WorkloadUsage{w}, e), DefaultConfig())[0]
 	if r.CPU.Action != ActionHold || r.Memory.Action != ActionHold {
@@ -89,7 +105,7 @@ func TestTrafficGrowthHoldsDownsize(t *testing.T) {
 
 func TestTrafficGrowthDoesNotBlockUpsize(t *testing.T) {
 	w := &collector.WorkloadUsage{Key: key("pay"), Replicas: 1,
-		CPURequestCores: 0.25, CPUP95Cores: 0.4, MemRequestBytes: 256 * mi, MemP95Bytes: 240 * mi}
+		HasCPUMetrics: true, HasMemMetrics: true, CPURequestCores: 0.25, CPUP95Cores: 0.4, MemRequestBytes: 256 * mi, MemP95Bytes: 240 * mi}
 	e := collector.Edge{From: key("checkout"), To: key("pay"), RatePerSec: 10, RecentRatePerSec: 30}
 	r := Recommend(snap([]*collector.WorkloadUsage{w}, e), DefaultConfig())[0]
 	if r.CPU.Action != ActionUpsize {

@@ -110,8 +110,8 @@ func Recommend(s *collector.Snapshot, cfg Config) []Recommendation {
 func recommendOne(w *collector.WorkloadUsage, up []Upstream, windowHours float64, cfg Config) Recommendation {
 	r := Recommendation{Workload: w.Key, Replicas: w.Replicas, Upstream: up}
 
-	r.CPU = sizeResource(w.CPURequestCores, w.CPUP95Cores, cfg.MinCPUCores, cfg, roundCPU)
-	r.Memory = sizeResource(w.MemRequestBytes, w.MemP95Bytes, cfg.MinMemBytes, cfg, roundMem)
+	r.CPU = sizeResource(w.CPURequestCores, w.CPUP95Cores, w.HasCPUMetrics, cfg.MinCPUCores, cfg, roundCPU)
+	r.Memory = sizeResource(w.MemRequestBytes, w.MemP95Bytes, w.HasMemMetrics, cfg.MinMemBytes, cfg, roundMem)
 
 	// Traffic-aware guard: don't shrink a workload whose callers are ramping up.
 	growing := 0.0
@@ -165,7 +165,7 @@ func recommendOne(w *collector.WorkloadUsage, up []Upstream, windowHours float64
 	}
 
 	switch {
-	case w.Replicas == 0 || (w.CPUP95Cores == 0 && w.MemP95Bytes == 0):
+	case w.Replicas == 0 || (!w.HasCPUMetrics && !w.HasMemMetrics):
 		r.Confidence = "low"
 	case windowHours < 24 || growing >= cfg.GrowthThreshold:
 		r.Confidence = "medium"
@@ -175,30 +175,32 @@ func recommendOne(w *collector.WorkloadUsage, up []Upstream, windowHours float64
 	return r
 }
 
-func sizeResource(current, p95, floor float64, cfg Config, round func(float64) float64) ResourceRec {
+func sizeResource(current, p95 float64, hasData bool, floor float64, cfg Config, round func(float64) float64) ResourceRec {
 	rr := ResourceRec{Current: current, P95: p95}
-	if p95 <= 0 {
+	if !hasData {
 		rr.Action = ActionNoData
 		rr.Recommended = current
 		return rr
 	}
-	rr.Recommended = round(math.Max(p95*(1+cfg.Headroom), floor))
+	need := p95 * (1 + cfg.Headroom) // what the workload actually needs
+	rr.Recommended = round(math.Max(need, floor))
 	if current <= 0 {
 		rr.Action = ActionSet
 		return rr
 	}
-	rr.ChangePct = (rr.Recommended - current) / current * 100
 	switch {
-	case p95 > current: // actually using more than requested: always upsize
+	case p95 > current || need > current*(1+cfg.Tolerance): // genuinely short
 		rr.Action = ActionUpsize
 	case rr.Recommended < current*(1-cfg.Tolerance):
 		rr.Action = ActionDownsize
-	case rr.Recommended > current*(1+cfg.Tolerance):
-		rr.Action = ActionUpsize
 	default:
+		// Includes the case where only the floor exceeds a (tiny) request: that is
+		// not a real shortage, so leave it alone.
 		rr.Action = ActionOK
 		rr.Recommended = current
-		rr.ChangePct = 0
+	}
+	if rr.Action != ActionOK {
+		rr.ChangePct = (rr.Recommended - current) / current * 100
 	}
 	return rr
 }

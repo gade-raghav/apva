@@ -35,6 +35,10 @@ type WorkloadUsage struct {
 	MemRequestBytes float64 `json:"memRequestBytes"`
 	MemP95Bytes     float64 `json:"memP95Bytes"`
 
+	// HasCPUMetrics / HasMemMetrics distinguish "used zero" from "no data".
+	HasCPUMetrics bool `json:"hasCpuMetrics"`
+	HasMemMetrics bool `json:"hasMemMetrics"`
+
 	GPURequested  float64 `json:"gpuRequested"`
 	GPUAvgUtilPct float64 `json:"gpuAvgUtilPct"`
 	GPUP95UtilPct float64 `json:"gpuP95UtilPct"`
@@ -186,6 +190,12 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		w.CPURequestCores = max(w.CPURequestCores, m["cpu_req"])
 		w.MemRequestBytes = max(w.MemRequestBytes, m["mem_req"])
 		w.GPURequested = max(w.GPURequested, m["gpu_req"])
+		if _, ok := m["cpu_p95"]; ok {
+			w.HasCPUMetrics = true
+		}
+		if _, ok := m["mem_p95"]; ok {
+			w.HasMemMetrics = true
+		}
 		if _, ok := m["gpu_avg"]; ok {
 			w.HasGPUMetrics = true
 			w.GPUAvgUtilPct = max(w.GPUAvgUtilPct, m["gpu_avg"])
