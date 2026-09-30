@@ -62,6 +62,8 @@ make build
 ./bin/apva --prometheus-url=http://localhost:9090 --listen=:8080
 ```
 
+**Beta testers:** start with [docs/beta-testing.md](docs/beta-testing.md).
+
 ## How APVA compares
 
 See [docs/positioning.md](docs/positioning.md). In short: APVA complements the Kubernetes
