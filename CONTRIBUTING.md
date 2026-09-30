@@ -1,7 +1,7 @@
 # Contributing to APVA
 
-Thanks for your interest! APVA is in private beta; contribution access is currently by
-invitation.
+Thanks for your interest! APVA is early (v0.1) and feedback is as valuable as code: see
+[docs/beta-testing.md](docs/beta-testing.md) and open issues labelled `beta-feedback`.
 
 ## Developer Certificate of Origin (DCO)
 

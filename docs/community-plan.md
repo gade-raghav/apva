@@ -3,11 +3,11 @@
 APVA is developed privately first, then opened to invited beta users, then released as open
 source and proposed to the CNCF Sandbox.
 
-## Stage 1 — Private build (now)
+## Stage 1 — Private build (done)
 - Private repo `gade-raghav/apva`, Apache-2.0, CNCF Code of Conduct, DCO.
 - Goal: v0.1 working end to end on kind (CI) and on at least one real cluster.
 
-## Stage 2 — Private beta
+## Stage 2 — Early testers (now; repo went public on 2026-09-30)
 - Invite 5–10 practitioners as read-only collaborators (Settings → Collaborators).
 - Where to find them: CNCF Slack (#kubernetes-users, #sig-autoscaling, #tag-* channels),
   Kubernetes SIG Autoscaling meetings, local CNCF community groups / Kubernetes meetups.

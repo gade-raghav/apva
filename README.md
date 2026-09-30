@@ -72,7 +72,7 @@ network dependency graph and GPU awareness that single-workload recommenders lac
 
 ## Contributing
 
-APVA is in private beta; contributions are by invitation for now. See [CONTRIBUTING.md](CONTRIBUTING.md). All commits must be
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md). All commits must be
 signed off under the [DCO](https://developercertificate.org/).
 
 ## Community
