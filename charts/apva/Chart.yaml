@@ -1,0 +1,11 @@
+apiVersion: v2
+name: apva
+description: APVA — traffic-aware CPU/memory/GPU right-sizing for Kubernetes workloads
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/gade-raghav/apva
+sources: [https://github.com/gade-raghav/apva]
+maintainers:
+  - name: Raghav Gade
+    url: https://github.com/gade-raghav

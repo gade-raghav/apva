@@ -1,0 +1,47 @@
+name: CI
+on:
+  push: {branches: [main]}
+  pull_request:
+permissions: {contents: read}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - name: Lint
+        run: make lint
+      - name: Unit tests
+        run: make test
+      - name: Build
+        run: make build
+      - name: Smoke test (demo mode)
+        run: ./bin/apva --demo --once | jq -e '.summary.workloads > 0'
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint charts/apva
+      - run: helm template apva charts/apva >/dev/null
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t apva:ci .
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Check Signed-off-by on every commit
+        run: |
+          fail=0
+          for c in $(git rev-list ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}); do
+            if ! git show -s --format=%B "$c" | grep -q '^Signed-off-by: '; then
+              echo "::error::commit $c is missing a DCO Signed-off-by line (use git commit -s)"; fail=1
+            fi
+          done
+          exit $fail

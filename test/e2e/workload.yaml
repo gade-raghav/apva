@@ -1,0 +1,35 @@
+# Test workloads with known behaviour, used by test/e2e/run.sh.
+apiVersion: v1
+kind: Namespace
+metadata: {name: e2e}
+---
+# Heavily over-provisioned: requests 1 CPU / 512Mi, uses almost nothing. Expect "downsize".
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: idle-web, namespace: e2e}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: idle-web}}
+  template:
+    metadata: {labels: {app: idle-web}}
+    spec:
+      containers:
+        - name: web
+          image: registry.k8s.io/pause:3.10
+          resources: {requests: {cpu: "1", memory: 512Mi}}
+---
+# Burns CPU well above its tiny request. Expect "upsize".
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: busy-worker, namespace: e2e}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: busy-worker}}
+  template:
+    metadata: {labels: {app: busy-worker}}
+    spec:
+      containers:
+        - name: worker
+          image: busybox:1.36
+          command: ["sh", "-c", "while true; do :; done"]
+          resources: {requests: {cpu: 20m, memory: 16Mi}, limits: {cpu: 300m}}

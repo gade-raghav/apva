@@ -1,0 +1,4 @@
+APVA is running (recommend-only; it never changes your workloads).
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "apva.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080

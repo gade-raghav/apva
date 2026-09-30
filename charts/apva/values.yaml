@@ -1,0 +1,36 @@
+image:
+  repository: ghcr.io/gade-raghav/apva
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+prometheus:
+  # Prometheus-compatible query endpoint (Prometheus, Thanos, Mimir, VictoriaMetrics)
+  url: http://prometheus-server.monitoring.svc:80
+
+analysis:
+  window: 24h        # look-back used for p95 usage
+  recentWindow: 1h   # used for the traffic trend
+  refresh: 5m
+  headroom: 0.15
+  namespaces: ""     # comma-separated; empty = all non-system namespaces
+  includeSystem: false
+
+# Run with the built-in sample cluster (no Prometheus needed) — for demos.
+demo: false
+
+replicaCount: 1
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 256Mi}
+
+service:
+  type: ClusterIP
+  port: 8080
+
+serviceMonitor:
+  enabled: false     # set true if you run the Prometheus Operator
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

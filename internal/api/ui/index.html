@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APVA</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #e3e2de;
+    --ok: #2f855a; --over: #c05621; --under: #c53030; --hold: #6b46c1; --idle: #b7791f; --unknown: #a0a09a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151514; --panel: #1f1f1d; --text: #ecebe8; --muted: #9d9c97; --line: #33322f;
+      --ok: #68d391; --over: #f6ad55; --under: #fc8181; --hold: #b794f4; --idle: #f6e05e; --unknown: #75746f; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: .02em; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header .meta { margin-left: auto; color: var(--muted); font-size: 12px; }
+  main { padding: 16px 20px; display: grid; gap: 16px; max-width: 1400px; margin: 0 auto; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .tile .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tile .l { color: var(--muted); font-size: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; min-width: 0; }
+  .panel h2 { font-size: 14px; margin: 0 0 8px; }
+  .grid2 { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+  svg { width: 100%; height: 440px; display: block; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr.sel td { background: color-mix(in srgb, var(--hold) 12%, transparent); }
+  tbody tr { cursor: pointer; }
+  .badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid currentColor; }
+  .warn { color: var(--idle); font-size: 12px; margin: 0; padding-left: 18px; }
+  #detail ul { padding-left: 18px; margin: 6px 0; }
+  #detail .muted, .muted { color: var(--muted); }
+  #err { color: var(--under); }
+</style>
+</head>
+<body>
+<header>
+  <h1>APVA</h1>
+  <span class="sub">Autoscale Provisioning Visualising Adaptor</span>
+  <span class="meta" id="meta">loading…</span>
+</header>
+<main>
+  <p id="err" hidden></p>
+  <section class="tiles" id="tiles"></section>
+  <ul class="warn" id="warnings"></ul>
+  <section class="grid2">
+    <div class="panel">
+      <h2>Service graph</h2>
+      <div class="legend">
+        <span><span class="dot" style="background:var(--ok)"></span>right-sized</span>
+        <span><span class="dot" style="background:var(--over)"></span>over-provisioned</span>
+        <span><span class="dot" style="background:var(--under)"></span>under-provisioned</span>
+        <span><span class="dot" style="background:var(--hold)"></span>held (traffic rising)</span>
+        <span><span class="dot" style="background:var(--idle)"></span>idle GPU</span>
+        <span><span class="dot" style="background:var(--unknown)"></span>no data</span>
+      </div>
+      <svg id="graph" role="img" aria-label="Service dependency graph"></svg>
+    </div>
+    <div class="panel" id="detail">
+      <h2>Details</h2>
+      <p class="muted">Select a workload in the graph or table.</p>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>Recommendations (per pod)</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Workload</th><th>Pods</th><th>CPU req → rec</th><th>CPU</th>
+          <th>Mem req → rec</th><th>Mem</th><th>GPU</th><th>Confidence</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
