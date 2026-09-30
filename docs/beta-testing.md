@@ -10,7 +10,7 @@ workloads.
   (kube-prometheus-stack or the prometheus-community `prometheus` chart both work)
 - Optional: **Cilium Hubble** metrics (for the service graph) and the **NVIDIA DCGM
   exporter** (for GPU analysis). APVA works without them and says what it skipped.
-- Go 1.22+ on your laptop (for option A), or Docker (for option B)
+- Go 1.22+ on your laptop (option A), or Helm (option B)
 
 ## Option A — run on your laptop (fastest, nothing installed in the cluster)
 
@@ -27,19 +27,19 @@ open http://localhost:8080
 Useful flags: `--namespaces=team-a,team-b`, `--window=72h` (default 24h),
 `--headroom=0.2` (default 0.15), `--once` (print JSON and exit).
 
-## Option B — run in the cluster
+## Option B — run in the cluster (prebuilt image)
 
 ```bash
 git clone https://github.com/gade-raghav/apva.git && cd apva
-docker build -t <your-registry>/apva:beta . && docker push <your-registry>/apva:beta
 
 helm install apva ./charts/apva -n apva --create-namespace \
-  --set image.repository=<your-registry>/apva --set image.tag=beta \
   --set prometheus.url=http://prometheus-server.monitoring.svc:80
 
 kubectl -n apva port-forward svc/apva 8080:8080
 open http://localhost:8080
 ```
+
+This pulls the public image `ghcr.io/gade-raghav/apva:v0.1.0` (amd64 and arm64).
 
 ## Just want to look first?
 
