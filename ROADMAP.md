@@ -7,6 +7,7 @@
 - [x] Traffic-aware context on recommendations
 - [x] HTTP API + built-in visualiser
 - [x] Helm chart, CI, kind-based e2e
+- [x] Opt-in automatic resizing of Deployments/StatefulSets with guardrails (pulled forward from v1.0)
 
 ## v0.2 — Integrate
 - [ ] `Recommendation` custom resource written by an in-cluster controller
@@ -20,7 +21,8 @@
 - [ ] GPU sharing suggestions (MIG / time-slicing)
 
 ## v1.0 — Act (opt-in)
-- [ ] Safe, opt-in automatic apply with guardrails and rollback
+- [ ] Automatic rollback when a resize leads to OOMKills or CPU throttling
+- [ ] In-place pod resize (no restarts) where the cluster supports it
 
 ## Community milestones
 - Private beta with invited CNCF community members

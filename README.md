@@ -27,8 +27,9 @@ confidence that the GPU-backed `inference` deployment is over-provisioned too.
 
 ## Status
 
-**Early development (v0.1, pre-alpha).** APVA is recommend-only today: it never changes your
-workloads. See [ROADMAP.md](ROADMAP.md).
+**Early development (v0.1, pre-alpha).** APVA is recommend-only by default: it never changes
+your workloads unless you turn on [automatic resizing](docs/auto-resize.md) (`--auto-resize`).
+See [ROADMAP.md](ROADMAP.md).
 
 ## What it does today
 
@@ -38,6 +39,7 @@ workloads. See [ROADMAP.md](ROADMAP.md).
 | GPU right-sizing | GPU utilisation from the NVIDIA DCGM exporter; flags idle or under-used GPUs |
 | Service graph | Workload-to-workload request rates from Hubble flow metrics |
 | Traffic-aware confidence | Recommendations for a workload include its upstream callers and their traffic trend |
+| Automatic resizing (opt-in) | Patches Deployment/StatefulSet requests with guardrails: confidence threshold, cooldown, 50% max downsize step, never above limits, skips HPA-managed and opted-out workloads — see [docs/auto-resize.md](docs/auto-resize.md) |
 | Visualiser | Built-in web UI: service graph coloured by waste, with a recommendations table |
 | API | `GET /api/v1/recommendations`, `GET /api/v1/graph`, `GET /healthz` |
 
@@ -60,6 +62,12 @@ Run locally against any Prometheus:
 ```bash
 make build
 ./bin/apva --prometheus-url=http://localhost:9090 --listen=:8080
+```
+
+**See it live in 5 minutes** (kind + Prometheus + a demo shop, auto-resize on):
+
+```bash
+./test/demo/up.sh        # then open http://localhost:8080
 ```
 
 **Beta testers:** start with [docs/beta-testing.md](docs/beta-testing.md).

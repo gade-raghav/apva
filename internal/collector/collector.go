@@ -109,6 +109,7 @@ func Queries(window, recent time.Duration, nsMatcher string) map[string]string {
 		"mem_p95":   fmt.Sprintf(`sum by (namespace, pod) (quantile_over_time(0.95, container_memory_working_set_bytes{%s}[%s]))`, c, w),
 		"cpu_req":   fmt.Sprintf(`sum by (namespace, pod) (kube_pod_container_resource_requests{resource="cpu"%s})`, nsMatcher),
 		"mem_req":   fmt.Sprintf(`sum by (namespace, pod) (kube_pod_container_resource_requests{resource="memory"%s})`, nsMatcher),
+		"running":   fmt.Sprintf(`sum by (namespace, pod) (kube_pod_status_phase{phase="Running"%s})`, nsMatcher),
 		"gpu_req":   fmt.Sprintf(`sum by (namespace, pod) (kube_pod_container_resource_requests{resource="nvidia_com_gpu"%s})`, nsMatcher),
 		"gpu_avg":   fmt.Sprintf(`avg by (namespace, pod) (avg_over_time(DCGM_FI_DEV_GPU_UTIL[%s]))`, w),
 		"gpu_p95":   fmt.Sprintf(`avg by (namespace, pod) (quantile_over_time(0.95, DCGM_FI_DEV_GPU_UTIL[%s]))`, w),
@@ -155,6 +156,13 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		}
 		add(m, s)
 	}
+	// Pods that are running now. Usage queries look back over the whole window and so also
+	// return pods that were replaced (e.g. by a rollout); those inform p95 but are not replicas.
+	haveRunning := false
+	if s, err := c.Q.Query(ctx, qs["running"]); err == nil && len(s) > 0 {
+		haveRunning = true
+		add("running", s)
+	}
 	gpuFound := false
 	for _, m := range []string{"gpu_req", "gpu_avg", "gpu_p95"} {
 		s, err := c.Q.Query(ctx, qs[m])
@@ -168,7 +176,7 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		add(m, s)
 	}
 	if !gpuFound {
-		snap.Warnings = append(snap.Warnings, "no DCGM GPU utilisation metrics found; GPU analysis skipped")
+		snap.Warnings = append(snap.Warnings, "GPU analysis off: no NVIDIA DCGM exporter metrics found (optional)")
 	}
 
 	// Aggregate pods into workloads. Per-pod values are combined conservatively:
@@ -184,7 +192,9 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 			w = &WorkloadUsage{Key: key}
 			wl[key] = w
 		}
-		w.Replicas++
+		if !haveRunning || m["running"] > 0 {
+			w.Replicas++
+		}
 		w.CPUP95Cores = max(w.CPUP95Cores, m["cpu_p95"])
 		w.MemP95Bytes = max(w.MemP95Bytes, m["mem_p95"])
 		w.CPURequestCores = max(w.CPURequestCores, m["cpu_req"])
@@ -203,6 +213,9 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 		}
 	}
 	for _, w := range wl {
+		if haveRunning && w.Replicas == 0 {
+			continue // deleted or scaled to zero during the window
+		}
 		snap.Workloads = append(snap.Workloads, w)
 	}
 	sort.Slice(snap.Workloads, func(i, j int) bool {
@@ -214,7 +227,7 @@ func (c *Collector) Collect(ctx context.Context) (*Snapshot, error) {
 	if err != nil {
 		snap.Warnings = append(snap.Warnings, fmt.Sprintf("Hubble flow metrics unavailable: %v", err))
 	} else if len(flows) == 0 {
-		snap.Warnings = append(snap.Warnings, "no Hubble flow metrics found; service graph skipped")
+		snap.Warnings = append(snap.Warnings, "service graph edges off: no Cilium Hubble flow metrics found (optional)")
 	} else {
 		recent := map[[2]WorkloadKey]float64{}
 		if now, err := c.Q.Query(ctx, qs["flows_now"]); err == nil {

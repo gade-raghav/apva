@@ -104,3 +104,38 @@ func TestRequiredSourceFailureIsFatal(t *testing.T) {
 		t.Fatal("expected error when CPU metrics fail")
 	}
 }
+
+// replaced adds a pod that a rollout replaced: it still has usage in the window but is no
+// longer running, so it must not count as a replica.
+type replaced struct{ prom.Querier }
+
+func (r replaced) Query(ctx context.Context, q string) ([]prom.Sample, error) {
+	s, err := r.Querier.Query(ctx, q)
+	old := map[string]string{"namespace": "shop", "pod": "frontend-6b8c7d5f4c-bx7zq"}
+	switch {
+	case strings.Contains(q, "kube_pod_status_phase"):
+		s = append(s, prom.Sample{Labels: map[string]string{"namespace": "shop", "pod": "frontend-7d9f8b6c4d-x2k9p"}, Value: 1},
+			prom.Sample{Labels: map[string]string{"namespace": "shop", "pod": "frontend-7d9f8b6c4d-q8w7f"}, Value: 1})
+	case strings.Contains(q, "container_cpu_usage_seconds_total"):
+		s = append(s, prom.Sample{Labels: old, Value: 0.9})
+	}
+	return s, err
+}
+
+func TestReplacedPodsInformUsageButAreNotReplicas(t *testing.T) {
+	c := newDemoCollector()
+	c.Q = replaced{c.Q}
+	s, err := c.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range s.Workloads {
+		if w.Key.String() == "shop/frontend" {
+			if w.Replicas != 2 || w.CPUP95Cores != 0.9 {
+				t.Errorf("frontend replicas=%d p95=%v, want 2 and 0.9", w.Replicas, w.CPUP95Cores)
+			}
+			return
+		}
+	}
+	t.Fatal("frontend missing")
+}

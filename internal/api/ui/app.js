@@ -14,6 +14,12 @@ let selected = null;
 const cores = (c) => (c >= 1 ? c.toFixed(2) : Math.round(c * 1000) + "m");
 const mib = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + "Gi" : Math.round(b / (1 << 20)) + "Mi");
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const OUTCOME_VAR = { applied: "--ok", "dry-run": "--hold", skipped: "--muted", failed: "--under" };
+const ago = (t) => {
+  const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
+  return s < 60 ? Math.round(s) + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : Math.round(s / 3600) + "h ago";
+};
+const outcome = (o) => `<span class="badge" style="color:var(${OUTCOME_VAR[o] || "--muted"})">${esc(o)}</span>`;
 const badge = (a) => `<span class="badge" style="color:var(${ACTION_VAR[a] || "--muted"})">${esc(a)}</span>`;
 
 async function load() {
@@ -42,6 +48,24 @@ function render() {
     [mib(s.memSavingsBytes), "memory reclaimable"],
     [s.gpuSavings, "idle GPUs"],
   ];
+  const ar = data.autoResize || { enabled: false, events: [] };
+  if (ar.enabled) tiles.push([s.autoResized || 0, ar.dryRun ? "would auto-resize" : "auto-resized"]);
+  $("mode").hidden = false;
+  $("mode").textContent = ar.enabled ? (ar.dryRun ? "auto-resize: dry-run" : "auto-resize: on") : "recommend-only";
+  $("mode").style.color = `var(${ar.enabled ? (ar.dryRun ? "--hold" : "--ok") : "--muted"})`;
+  $("mode").title = ar.enabled ? `acts on ${ar.minConfidence}+ confidence, cooldown ${ar.cooldown}` : "start with --auto-resize to apply recommendations automatically";
+  $("arcol").hidden = !ar.enabled;
+  $("activity-panel").hidden = !ar.enabled;
+  const latestEv = {};
+  for (const ev of ar.events || []) {
+    const id = ev.workload.namespace + "/" + ev.workload.name;
+    if (!latestEv[id]) latestEv[id] = ev;
+  }
+  $("activity").innerHTML = (ar.events || []).length
+    ? ar.events.slice(0, 25).map((ev) => `<li><time datetime="${esc(ev.time)}">${ago(ev.time)}</time>
+        ${outcome(ev.outcome)} <strong>${esc(ev.workload.namespace + "/" + ev.workload.name)}</strong>
+        <span class="muted">${esc(ev.reason)}</span></li>`).join("")
+    : `<li class="muted">No resizes yet. APVA acts once a recommendation reaches ${esc(ar.minConfidence || "high")} confidence.</li>`;
   $("tiles").innerHTML = tiles.map(([v, l]) => `<div class="tile"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join("");
   $("warnings").innerHTML = (data.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
 
@@ -52,7 +76,8 @@ function render() {
       <td>${esc(id)}</td><td>${r.replicas}</td>
       <td>${cores(r.cpu.current)} → ${cores(r.cpu.recommended)}</td><td>${badge(r.cpu.action)}</td>
       <td>${mib(r.memory.current)} → ${mib(r.memory.recommended)}</td><td>${badge(r.memory.action)}</td>
-      <td>${gpu}</td><td>${esc(r.confidence)}</td></tr>`;
+      <td>${gpu}</td><td>${esc(r.confidence)}</td>
+      ${ar.enabled ? `<td>${latestEv[id] ? `${outcome(latestEv[id].outcome)} <span class="muted">${ago(latestEv[id].time)}</span>` : `<span class="muted">—</span>`}</td>` : ""}</tr>`;
   }).join("");
   for (const tr of $("rows").querySelectorAll("tr")) tr.onclick = () => select(tr.dataset.id);
 
@@ -82,7 +107,17 @@ function showDetail(id) {
       ${r.gpu ? `<li>GPU: ${r.gpu.requested} requested, avg ${r.gpu.avgUtilPct.toFixed(1)}%, p95 ${r.gpu.p95UtilPct.toFixed(1)}% ${badge(r.gpu.action)}</li>` : ""}
     </ul>
     ${r.reasons && r.reasons.length ? `<strong>Why</strong><ul>${r.reasons.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}
+    ${autoDetail(id)}
     ${callers ? `<strong>Called by</strong><ul>${callers}</ul>` : `<p class="muted">No observed callers.</p>`}`;
+}
+
+function autoDetail(id) {
+  const ar = data.autoResize;
+  if (!ar || !ar.enabled) return "";
+  const evs = (ar.events || []).filter((ev) => ev.workload.namespace + "/" + ev.workload.name === id).slice(0, 5);
+  if (!evs.length) return "";
+  return `<strong>Auto-resize</strong><ul>${evs.map((ev) =>
+    `<li>${outcome(ev.outcome)} ${esc(ev.reason)} <span class="muted">${ago(ev.time)}</span></li>`).join("")}</ul>`;
 }
 
 // Small force-directed layout; deterministic start so the picture is stable between refreshes.
@@ -142,4 +177,4 @@ function drawGraph(g) {
 
 window.addEventListener("resize", () => data && drawGraph(data.graph));
 load();
-setInterval(load, 30000);
+setInterval(load, 10000);
