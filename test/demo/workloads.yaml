@@ -1,0 +1,417 @@
+# Copyright 2026 Raghav Gade
+# SPDX-License-Identifier: Apache-2.0
+#
+# A small "shop" with realistic sizing mistakes, used by test/demo/up.sh.
+# Every pod runs the same tiny simulator (ConfigMap below) that burns a set amount of CPU,
+# holds a set amount of memory, serves HTTP on :8080 and calls its peers, so the cluster
+# has real usage (and real traffic for the service graph when Cilium/Hubble is installed).
+#
+#   workload        requests       actually uses   what APVA should do
+#   frontend x2     300m / 192Mi   ~40m / ~45Mi    downsize (in 50% steps)
+#   catalog         500m / 384Mi   ~70m / ~95Mi    downsize
+#   recommender     600m / 512Mi   ~60m / ~165Mi   downsize
+#   redis (sts)     250m / 192Mi   ~25m / ~75Mi    downsize (StatefulSet)
+#   payments        50m  / 64Mi    wants 600m      upsize CPU, capped at its 400m limit
+#   search x2       200m / 128Mi   ~150m / ~215Mi  upsize memory
+#   checkout        150m / 192Mi   ~120m / ~155Mi  leave alone (right-sized)
+#   notifications   100m / 96Mi    ~80m / ~75Mi    leave alone (right-sized)
+#   orders-api x2   250m / 128Mi   ~30m / ~45Mi    over-provisioned, but skipped: has an HPA
+#   legacy-batch    400m / 192Mi   ~20m / ~35Mi    over-provisioned, but skipped: opted out
+apiVersion: v1
+kind: Namespace
+metadata: {name: shop}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: loadsim, namespace: shop}
+data:
+  loadsim.py: |
+    import os, random, threading, time, urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    CPU = float(os.environ.get("CPU_MILLI", "0")) / 1000
+    MEM = int(os.environ.get("MEM_MIB", "0"))
+    JITTER = float(os.environ.get("JITTER", "0.15"))
+    PEERS = [p for p in os.environ.get("PEERS", "").split(",") if p]
+    RPS = float(os.environ.get("RPS", "2"))
+
+    # Hold MEM MiB and touch every page so it shows up in the working set.
+    ballast = bytearray(MEM * 1024 * 1024)
+    for i in range(0, len(ballast), 4096):
+        ballast[i] = 1
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok\n")
+        def log_message(self, *args):
+            pass
+
+    threading.Thread(target=ThreadingHTTPServer(("", 8080), Handler).serve_forever, daemon=True).start()
+
+    def call_peers():
+        while True:
+            for p in PEERS:
+                try:
+                    urllib.request.urlopen(p, timeout=2).read()
+                except Exception:
+                    pass
+            time.sleep(1 / RPS)
+    if PEERS:
+        threading.Thread(target=call_peers, daemon=True).start()
+
+    # Burn CPU with a duty cycle: busy for a fraction of every 100ms.
+    PERIOD = 0.1
+    while True:
+        busy = PERIOD * min(1.0, max(0.0, CPU * (1 + random.uniform(-JITTER, JITTER))))
+        end = time.perf_counter() + busy
+        while time.perf_counter() < end:
+            pass
+        time.sleep(PERIOD - busy)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: shop
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: frontend}}
+  template:
+    metadata: {labels: {app: frontend}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "40"}
+            - {name: MEM_MIB, value: "30"}
+            - {name: PEERS, value: "http://catalog:8080,http://checkout:8080,http://search:8080,http://recommender:8080"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 300m, memory: 192Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: frontend, namespace: shop}
+spec:
+  selector: {app: frontend}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: catalog
+  namespace: shop
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: catalog}}
+  template:
+    metadata: {labels: {app: catalog}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "70"}
+            - {name: MEM_MIB, value: "80"}
+            - {name: PEERS, value: "http://redis:8080"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 500m, memory: 384Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: catalog, namespace: shop}
+spec:
+  selector: {app: catalog}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommender
+  namespace: shop
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: recommender}}
+  template:
+    metadata: {labels: {app: recommender}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "60"}
+            - {name: MEM_MIB, value: "150"}
+            - {name: PEERS, value: "http://redis:8080"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 600m, memory: 512Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: recommender, namespace: shop}
+spec:
+  selector: {app: recommender}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: shop
+spec:
+  replicas: 1
+  serviceName: redis
+  selector: {matchLabels: {app: redis}}
+  template:
+    metadata: {labels: {app: redis}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "25"}
+            - {name: MEM_MIB, value: "60"}
+            - {name: PEERS, value: ""}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 250m, memory: 192Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redis, namespace: shop}
+spec:
+  selector: {app: redis}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payments
+  namespace: shop
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: payments}}
+  template:
+    metadata: {labels: {app: payments}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "600"}
+            - {name: MEM_MIB, value: "20"}
+            - {name: PEERS, value: ""}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 400m}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: payments, namespace: shop}
+spec:
+  selector: {app: payments}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search
+  namespace: shop
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: search}}
+  template:
+    metadata: {labels: {app: search}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "150"}
+            - {name: MEM_MIB, value: "200"}
+            - {name: PEERS, value: "http://catalog:8080"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 200m, memory: 128Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: search, namespace: shop}
+spec:
+  selector: {app: search}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout
+  namespace: shop
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: checkout}}
+  template:
+    metadata: {labels: {app: checkout}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "120"}
+            - {name: MEM_MIB, value: "140"}
+            - {name: PEERS, value: "http://payments:8080,http://orders-api:8080"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 150m, memory: 192Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: checkout, namespace: shop}
+spec:
+  selector: {app: checkout}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifications
+  namespace: shop
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: notifications}}
+  template:
+    metadata: {labels: {app: notifications}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "80"}
+            - {name: MEM_MIB, value: "60"}
+            - {name: PEERS, value: ""}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 100m, memory: 96Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: notifications, namespace: shop}
+spec:
+  selector: {app: notifications}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orders-api
+  namespace: shop
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: orders-api}}
+  template:
+    metadata: {labels: {app: orders-api}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "30"}
+            - {name: MEM_MIB, value: "30"}
+            - {name: PEERS, value: "http://notifications:8080"}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 250m, memory: 128Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: orders-api, namespace: shop}
+spec:
+  selector: {app: orders-api}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: legacy-batch
+  namespace: shop
+  annotations: {apva.io/auto-resize: "off"}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: legacy-batch}}
+  template:
+    metadata: {labels: {app: legacy-batch}}
+    spec:
+      terminationGracePeriodSeconds: 2
+      containers:
+        - name: app
+          image: python:3.12-alpine
+          command: ["python", "-u", "/sim/loadsim.py"]
+          env:
+            - {name: CPU_MILLI, value: "20"}
+            - {name: MEM_MIB, value: "20"}
+            - {name: PEERS, value: ""}
+          ports: [{containerPort: 8080}]
+          resources:
+            requests: {cpu: 400m, memory: 192Mi}
+          volumeMounts: [{name: sim, mountPath: /sim}]
+      volumes: [{name: sim, configMap: {name: loadsim}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: legacy-batch, namespace: shop}
+spec:
+  selector: {app: legacy-batch}
+  ports: [{port: 8080, targetPort: 8080}]
+---
+# orders-api scales horizontally, so APVA leaves its requests alone (the HPA target
+# utilisation already provides headroom). No metrics-server is needed for the demo.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: orders-api, namespace: shop}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: orders-api}
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}

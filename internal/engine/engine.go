@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gade-raghav/apva/internal/actuator"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/recommender"
 )
@@ -24,6 +25,17 @@ type Summary struct {
 	CPUSavingsCores  float64 `json:"cpuSavingsCores"`
 	MemSavingsBytes  float64 `json:"memSavingsBytes"`
 	GPUSavings       float64 `json:"gpuSavings"`
+	// AutoResized counts workloads APVA resized automatically (recent history).
+	AutoResized int `json:"autoResized"`
+}
+
+// AutoResize reports the state of automatic resizing.
+type AutoResize struct {
+	Enabled       bool             `json:"enabled"`
+	DryRun        bool             `json:"dryRun"`
+	MinConfidence string           `json:"minConfidence"`
+	Cooldown      string           `json:"cooldown"`
+	Events        []actuator.Event `json:"events"`
 }
 
 // Node and Link form the service graph returned to the visualiser.
@@ -55,6 +67,7 @@ type Result struct {
 	Recommendations []recommender.Recommendation `json:"recommendations"`
 	Graph           Graph                        `json:"graph"`
 	Warnings        []string                     `json:"warnings,omitempty"`
+	AutoResize      AutoResize                   `json:"autoResize"`
 }
 
 // Collector is what the engine needs from a data source.
@@ -62,11 +75,20 @@ type Collector interface {
 	Collect(ctx context.Context) (*collector.Snapshot, error)
 }
 
+// Actuator applies recommendations; implemented by *actuator.Actuator.
+type Actuator interface {
+	Apply(ctx context.Context, recs []recommender.Recommendation)
+	History() []actuator.Event
+}
+
 // Engine is safe for concurrent use.
 type Engine struct {
 	C   Collector
 	Cfg recommender.Config
 	Log *slog.Logger
+	// Act, if set, resizes workloads automatically after each analysis.
+	Act    Actuator
+	ActCfg actuator.Config
 
 	mu      sync.RWMutex
 	last    *Result
@@ -90,6 +112,20 @@ func (e *Engine) RunOnce(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 	res := Analyse(snap, e.Cfg)
+	if e.Act != nil {
+		e.Act.Apply(ctx, res.Recommendations)
+		res.AutoResize = AutoResize{
+			Enabled: true, DryRun: e.ActCfg.DryRun, MinConfidence: e.ActCfg.MinConfidence,
+			Cooldown: e.ActCfg.Cooldown.String(), Events: e.Act.History(),
+		}
+		resized := map[collector.WorkloadKey]bool{}
+		for _, ev := range res.AutoResize.Events {
+			if ev.Outcome == actuator.OutcomeApplied {
+				resized[ev.Workload] = true
+			}
+		}
+		res.Summary.AutoResized = len(resized)
+	}
 	e.mu.Lock()
 	e.last, e.lastErr = res, nil
 	e.mu.Unlock()

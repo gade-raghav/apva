@@ -18,10 +18,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gade-raghav/apva/internal/actuator"
 	"github.com/gade-raghav/apva/internal/api"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/demo"
 	"github.com/gade-raghav/apva/internal/engine"
+	"github.com/gade-raghav/apva/internal/kube"
 	"github.com/gade-raghav/apva/internal/prom"
 	"github.com/gade-raghav/apva/internal/recommender"
 )
@@ -38,6 +40,7 @@ func main() {
 
 func run() error {
 	def := recommender.DefaultConfig()
+	actDef := actuator.DefaultConfig()
 	var (
 		promURL    = flag.String("prometheus-url", envOr("APVA_PROMETHEUS_URL", "http://localhost:9090"), "Prometheus-compatible query endpoint")
 		listen     = flag.String("listen", envOr("APVA_LISTEN", ":8080"), "HTTP listen address")
@@ -50,6 +53,13 @@ func run() error {
 		demoMode   = flag.Bool("demo", false, "use a built-in sample cluster instead of Prometheus")
 		once       = flag.Bool("once", false, "analyse once, print JSON to stdout and exit")
 		showVer    = flag.Bool("version", false, "print version and exit")
+
+		autoResize = flag.Bool("auto-resize", envOr("APVA_AUTO_RESIZE", "") == "true", "apply recommendations automatically by patching Deployment/StatefulSet requests")
+		arDryRun   = flag.Bool("auto-resize-dry-run", false, "with --auto-resize: decide and log, but never patch")
+		arMinConf  = flag.String("auto-resize-min-confidence", actDef.MinConfidence, "with --auto-resize: lowest confidence to act on (high|medium|low)")
+		arCooldown = flag.Duration("auto-resize-cooldown", actDef.Cooldown, "with --auto-resize: minimum time between resizes of one workload")
+		arMaxDown  = flag.Float64("auto-resize-max-down", actDef.MaxDownStep, "with --auto-resize: max fraction a request may shrink in one step")
+		kubeAPI    = flag.String("kube-api", envOr("APVA_KUBE_API", ""), "Kubernetes API URL for --auto-resize outside a cluster, e.g. http://127.0.0.1:8001 from `kubectl proxy` (default: in-cluster service account)")
 	)
 	flag.Parse()
 	if *showVer {
@@ -75,6 +85,32 @@ func run() error {
 		}},
 		Cfg: cfg,
 		Log: log,
+	}
+
+	if *autoResize {
+		if *demoMode {
+			return errors.New("--auto-resize needs a real cluster; it cannot be combined with --demo")
+		}
+		switch *arMinConf {
+		case "high", "medium", "low":
+		default:
+			return fmt.Errorf("--auto-resize-min-confidence must be high, medium or low, got %q", *arMinConf)
+		}
+		if *arMaxDown <= 0 || *arMaxDown > 1 {
+			return fmt.Errorf("--auto-resize-max-down must be in (0, 1], got %g", *arMaxDown)
+		}
+		var k *kube.Client
+		if *kubeAPI != "" {
+			k = kube.New(*kubeAPI)
+		} else {
+			var err error
+			if k, err = kube.InCluster(); err != nil {
+				return fmt.Errorf("--auto-resize: %w", err)
+			}
+		}
+		eng.ActCfg = actuator.Config{DryRun: *arDryRun, MinConfidence: *arMinConf, Cooldown: *arCooldown, MaxDownStep: *arMaxDown}
+		eng.Act = &actuator.Actuator{K: k, Cfg: eng.ActCfg, Log: log}
+		log.Info("auto-resize enabled", "dryRun", *arDryRun, "minConfidence", *arMinConf, "cooldown", arCooldown.String(), "maxDown", *arMaxDown)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

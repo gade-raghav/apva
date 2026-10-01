@@ -15,7 +15,7 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "apva.fullname" . }}
-      automountServiceAccountToken: false
+      automountServiceAccountToken: {{ .Values.autoResize.enabled }}
       securityContext:
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
@@ -35,6 +35,15 @@ spec:
             {{- end }}
             {{- if .Values.analysis.includeSystem }}
             - --include-system
+            {{- end }}
+            {{- if .Values.autoResize.enabled }}
+            - --auto-resize
+            - --auto-resize-min-confidence={{ .Values.autoResize.minConfidence }}
+            - --auto-resize-cooldown={{ .Values.autoResize.cooldown }}
+            - --auto-resize-max-down={{ .Values.autoResize.maxDownStep }}
+            {{- if .Values.autoResize.dryRun }}
+            - --auto-resize-dry-run
+            {{- end }}
             {{- end }}
             {{- if .Values.demo }}
             - --demo

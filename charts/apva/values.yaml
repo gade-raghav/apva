@@ -15,6 +15,18 @@ analysis:
   namespaces: ""     # comma-separated; empty = all non-system namespaces
   includeSystem: false
 
+# Automatic resizing (opt-in). When enabled, APVA patches the CPU/memory requests of
+# Deployments and StatefulSets it analyses, with guardrails: confidence threshold,
+# cooldown, max downsize step, never above container limits, HPA-managed workloads and
+# workloads annotated apva.io/auto-resize: "off" are skipped. Grants APVA RBAC to
+# get/list/patch deployments and statefulsets and to list HPAs.
+autoResize:
+  enabled: false
+  dryRun: false          # decide and show what would change, without patching
+  minConfidence: high    # high needs >= 24h of data; use medium for short windows / demos
+  cooldown: 30m
+  maxDownStep: 0.5       # shrink at most 50% per step
+
 # Run with the built-in sample cluster (no Prometheus needed) — for demos.
 demo: false
 

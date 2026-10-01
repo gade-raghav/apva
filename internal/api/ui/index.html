@@ -38,16 +38,22 @@
   tr.sel td { background: color-mix(in srgb, var(--hold) 12%, transparent); }
   tbody tr { cursor: pointer; }
   .badge { font-size: 11px; padding: 1px 6px; border-radius: 10px; border: 1px solid currentColor; }
-  .warn { color: var(--idle); font-size: 12px; margin: 0; padding-left: 18px; }
+  .warn { color: var(--muted); font-size: 12px; margin: 0; padding-left: 18px; }
   #detail ul { padding-left: 18px; margin: 6px 0; }
   #detail .muted, .muted { color: var(--muted); }
   #err { color: var(--under); }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 10px; border: 1px solid currentColor; }
+  #activity { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  #activity li { padding: 6px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+  #activity li:last-child { border-bottom: 0; }
+  #activity time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 64px; }
 </style>
 </head>
 <body>
 <header>
   <h1>APVA</h1>
   <span class="sub">Autoscale Provisioning Visualising Adaptor</span>
+  <span class="pill" id="mode" hidden></span>
   <span class="meta" id="meta">loading…</span>
 </header>
 <main>
@@ -78,11 +84,15 @@
       <table>
         <thead><tr>
           <th>Workload</th><th>Pods</th><th>CPU req → rec</th><th>CPU</th>
-          <th>Mem req → rec</th><th>Mem</th><th>GPU</th><th>Confidence</th>
+          <th>Mem req → rec</th><th>Mem</th><th>GPU</th><th>Confidence</th><th id="arcol" hidden>Auto-resize</th>
         </tr></thead>
         <tbody id="rows"></tbody>
       </table>
     </div>
+  </section>
+  <section class="panel" id="activity-panel" hidden>
+    <h2>Auto-resize activity</h2>
+    <ul id="activity"></ul>
   </section>
 </main>
 <script src="app.js"></script>

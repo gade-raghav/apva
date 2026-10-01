@@ -4,7 +4,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 IMG ?= ghcr.io/gade-raghav/apva:$(VERSION)
 PROMETHEUS_URL ?= http://localhost:9090
 
-.PHONY: all build test lint run demo image e2e clean
+.PHONY: all build test lint run demo demo-cluster demo-down image e2e clean
 all: lint test build
 
 build:
@@ -22,6 +22,12 @@ run: build
 
 demo: build
 	./bin/apva --demo
+
+demo-cluster:
+	./test/demo/up.sh
+
+demo-down:
+	./test/demo/down.sh
 
 image:
 	docker build --build-arg VERSION=$(VERSION) -t $(IMG) .

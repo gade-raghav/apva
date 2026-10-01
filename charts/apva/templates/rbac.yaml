@@ -1,0 +1,29 @@
+{{- if .Values.autoResize.enabled }}
+# Permissions for automatic resizing: read and patch Deployments/StatefulSets, read HPAs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "apva.fullname" . }}-resizer
+  labels: {{- include "apva.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "apva.fullname" . }}-resizer
+  labels: {{- include "apva.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "apva.fullname" . }}-resizer
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "apva.fullname" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}
