@@ -40,7 +40,7 @@ See [ROADMAP.md](ROADMAP.md).
 | Service graph | Workload-to-workload request rates from Hubble flow metrics |
 | Traffic-aware confidence | Recommendations for a workload include its upstream callers and their traffic trend |
 | Automatic resizing (opt-in) | Patches Deployment/StatefulSet requests with guardrails: confidence threshold, cooldown, 50% max downsize step, never above limits, skips HPA-managed and opted-out workloads — see [docs/auto-resize.md](docs/auto-resize.md) |
-| **Amazon EKS node groups** (opt-in) | Checks resized pods will fit; scales EKS managed node groups up *before* growing pods and drains + removes under-used nodes *after* shrinking them — see [docs/aws.md](docs/aws.md) |
+| **Node-aware resizing** | Checks every resize will fit (including the rollout's surge pod); works with Karpenter / Cluster Autoscaler; with the **Amazon EKS provider** (opt-in) scales managed node groups up *before* resizing and drains + removes under-used nodes *after* — see [docs/aws.md](docs/aws.md) |
 | Visualiser | Built-in web UI: service graph coloured by waste, with a recommendations table |
 | API | `GET /api/v1/recommendations`, `GET /api/v1/graph`, `GET /healthz` |
 

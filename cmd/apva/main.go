@@ -70,6 +70,7 @@ func run() error {
 		awsUpTimeout   = flag.Duration("aws-scale-up-timeout", capDef.ScaleUpTimeout, "how long to wait for new nodes to become Ready")
 		awsDrainTO     = flag.Duration("aws-drain-timeout", capDef.DrainTimeout, "give up draining a node (and uncordon it) after this long")
 		awsCooldown    = flag.Duration("aws-nodegroup-cooldown", capDef.Cooldown, "minimum time between two changes to one node group")
+		extAutoscaler  = flag.Bool("node-autoscaler-present", false, "a Cluster Autoscaler adds nodes for Pending pods: let upsizes that do not fit go ahead (Karpenter nodes are detected automatically)")
 		kubeAPI        = flag.String("kube-api", envOr("APVA_KUBE_API", ""), "Kubernetes API URL for --auto-resize outside a cluster, e.g. http://127.0.0.1:8001 from `kubectl proxy` (default: in-cluster service account)")
 	)
 	flag.Parse()
@@ -125,7 +126,7 @@ func run() error {
 		eng.ActCfg = actuator.Config{DryRun: *arDryRun, MinConfidence: *arMinConf, Cooldown: *arCooldown, MaxDownStep: *arMaxDown}
 		act := &actuator.Actuator{K: k, Cfg: eng.ActCfg, Log: log}
 		mgr := &capacity.Manager{K: k, Log: log, Cfg: capDef}
-		mgr.Cfg.DryRun = *arDryRun
+		mgr.Cfg.DryRun, mgr.Cfg.ExternalAutoscaler = *arDryRun, *extAutoscaler
 		if *awsCluster != "" {
 			if *awsRegion == "" {
 				return errors.New("--aws-cluster needs --aws-region (or AWS_REGION)")
@@ -143,19 +144,20 @@ func run() error {
 				return fmt.Errorf("--aws-consolidate-below must be in (0, 1], got %g", *awsConsolBelow)
 			}
 			client := awsapi.NewClient(*awsRegion)
-			// For LocalStack and tests.
+			// For LocalStack and the e2e test's fake AWS.
 			client.EKSEndpoint, client.AutoscalingEndpoint = os.Getenv("APVA_AWS_EKS_ENDPOINT"), os.Getenv("APVA_AWS_AUTOSCALING_ENDPOINT")
 			if client.Creds.Source() == "" {
 				return errors.New("--aws-cluster: no AWS credentials found (use EKS Pod Identity or IRSA, see docs/aws.md)")
 			}
-			mgr.AWS = client
-			mgr.Cfg.Cluster, mgr.Cfg.Nodegroups = *awsCluster, groups
+			mgr.Provider = &awsapi.NodeProvider{Client: client, Cluster: *awsCluster}
+			mgr.Cfg.Groups = groups
 			mgr.Cfg.Consolidate, mgr.Cfg.ConsolidateBelow = *awsConsol, *awsConsolBelow
 			mgr.Cfg.ScaleUpTimeout, mgr.Cfg.DrainTimeout, mgr.Cfg.Cooldown = *awsUpTimeout, *awsDrainTO, *awsCooldown
-			eng.Nodes, eng.NodesCfg = mgr, mgr.Cfg
+			eng.NodesProvider, eng.NodesCluster = "aws", *awsCluster
 			log.Info("EKS node group management enabled", "cluster", *awsCluster, "region", *awsRegion,
 				"nodegroups", *awsNodegroups, "consolidate", *awsConsol, "credentials", client.Creds.Source())
 		}
+		eng.Nodes, eng.NodesCfg = mgr, mgr.Cfg
 		act.Capacity = mgr
 		eng.Act = act
 		log.Info("auto-resize enabled", "dryRun", *arDryRun, "minConfidence", *arMinConf, "cooldown", arCooldown.String(), "maxDown", *arMaxDown)

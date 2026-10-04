@@ -13,30 +13,41 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gade-raghav/apva/internal/aws"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/kube"
 )
 
-// NodeGroups is the subset of the AWS client the manager uses.
-type NodeGroups interface {
-	DescribeNodegroup(ctx context.Context, cluster, nodegroup string) (aws.Nodegroup, error)
-	SetDesiredSize(ctx context.Context, cluster string, ng aws.Nodegroup, desired int) error
-	TerminateInstance(ctx context.Context, instanceID string) error
+// Group is a provider's node group (an EKS managed node group, a GKE node pool, ...).
+type Group struct {
+	Name, Status                  string // Status: "ACTIVE" when it can be changed
+	MinSize, MaxSize, DesiredSize int
+}
+
+// Provider adds and removes nodes for one cloud. APVA ships an Amazon EKS provider
+// (internal/aws); others implement the same four calls.
+type Provider interface {
+	Name() string       // e.g. "aws"
+	GroupLabel() string // node label holding a node's group name
+	DescribeGroup(ctx context.Context, group string) (Group, error)
+	SetDesiredSize(ctx context.Context, g Group, desired int) error
+	// RemoveNode removes exactly this node and lowers its group's desired size by one.
+	RemoveNode(ctx context.Context, n *Node) error
 }
 
 // Config tunes the manager.
 type Config struct {
 	DryRun bool
 
-	// AWS node group management; leave Cluster empty to only check capacity.
-	Cluster          string          // EKS cluster name
-	Nodegroups       map[string]bool // managed node groups APVA may resize (allowlist)
-	ScaleUpTimeout   time.Duration   // how long to wait for new nodes to become Ready
-	Consolidate      bool            // drain and remove under-used nodes
-	ConsolidateBelow float64         // a node is a candidate when every resource is below this fraction requested
-	DrainTimeout     time.Duration   // give up (and uncordon) after this long
-	Cooldown         time.Duration   // minimum time between two changes to one node group
+	// Node group management (needs a Provider).
+	Groups map[string]bool // node groups APVA may resize (allowlist)
+	// ExternalAutoscaler: a Cluster Autoscaler adds nodes for Pending pods, so upsizes on
+	// unmanaged groups may go ahead. Karpenter nodes are detected and treated this way.
+	ExternalAutoscaler bool
+	ScaleUpTimeout     time.Duration // how long to wait for new nodes to become Ready
+	Consolidate        bool          // drain and remove under-used nodes
+	ConsolidateBelow   float64       // a node is a candidate when every resource is below this fraction requested
+	DrainTimeout       time.Duration // give up (and uncordon) after this long
+	Cooldown           time.Duration // minimum time between two changes to one node group
 }
 
 // DefaultConfig returns safe defaults.
@@ -49,10 +60,10 @@ func DefaultConfig() Config {
 
 // Event is one node group decision, shown in the dashboard next to workload resizes.
 type Event struct {
-	Time      time.Time `json:"time"`
-	Nodegroup string    `json:"nodegroup"`
-	Outcome   string    `json:"outcome"` // applied | dry-run | waiting | skipped | failed
-	Reason    string    `json:"reason"`
+	Time    time.Time `json:"time"`
+	Group   string    `json:"group"`
+	Outcome string    `json:"outcome"` // applied | dry-run | waiting | skipped | failed
+	Reason  string    `json:"reason"`
 }
 
 // Decision is the answer to "may this workload be resized upwards now?".
@@ -75,11 +86,11 @@ type pendingScaleUp struct {
 
 // Manager checks capacity and manages EKS node groups. Safe for concurrent use.
 type Manager struct {
-	K   API
-	AWS NodeGroups // nil: capacity checks only
-	Cfg Config
-	Log *slog.Logger
-	Now func() time.Time
+	K        API
+	Provider Provider // nil: capacity checks only
+	Cfg      Config
+	Log      *slog.Logger
+	Now      func() time.Time
 
 	mu         sync.Mutex
 	pending    map[string]*pendingScaleUp
@@ -96,7 +107,14 @@ func (m *Manager) now() time.Time {
 }
 
 func (m *Manager) managed(group string) bool {
-	return m.AWS != nil && group != "" && m.Cfg.Nodegroups[group]
+	return m.Provider != nil && group != "" && m.Cfg.Groups[group]
+}
+
+func (m *Manager) groupLabel() string {
+	if m.Provider == nil {
+		return ""
+	}
+	return m.Provider.GroupLabel()
 }
 
 // History returns recent node group decisions, newest first.
@@ -112,7 +130,7 @@ func (m *Manager) record(group, outcome, reason string) {
 	if m.last == nil {
 		m.last = map[string]Event{}
 	}
-	ev := Event{Time: m.now().UTC(), Nodegroup: group, Outcome: outcome, Reason: reason}
+	ev := Event{Time: m.now().UTC(), Group: group, Outcome: outcome, Reason: reason}
 	if prev, ok := m.last[group]; ok && prev.Outcome == outcome && prev.Reason == reason && outcome != "applied" {
 		return
 	}
@@ -161,10 +179,12 @@ func place(free []Resources, req Resources, want int) int {
 }
 
 // Ensure decides whether a workload whose pods will each request cpu cores and mem bytes
-// can be resized now. On a managed EKS node group without room it scales the group up
+// can be resized now: all replicas must fit once the old pods are gone, and the rolling
+// update's first new pod must fit while they are all still running (this matters for
+// downsizes too). On a managed EKS node group without room it scales the group up
 // and answers Waiting until the new nodes are Ready.
 func (m *Manager) Ensure(ctx context.Context, w collector.WorkloadKey, cpu, mem float64, replicas int) (Decision, string) {
-	cl, err := Load(ctx, m.K)
+	cl, err := Load(ctx, m.K, m.groupLabel())
 	if err != nil {
 		return Fits, "" // can't see nodes (e.g. no RBAC): behave as before rather than block
 	}
@@ -209,7 +229,14 @@ func (m *Manager) Ensure(ctx context.Context, w collector.WorkloadKey, cpu, mem 
 	surgeOK := place(before, req, 1) == 1
 	fit := place(after, req, replicas)
 	if fit >= replicas && surgeOK {
-		m.clearPending(groupList(groups))
+		for _, g := range groupList(groups) {
+			if m.scalingUp(g) {
+				// The nodes we added are ready. Restart the group's cooldown so consolidation
+				// leaves them alone while this workload's rollout moves onto them.
+				m.clearPending([]string{g})
+				m.touch(g)
+			}
+		}
 		return Fits, ""
 	}
 
@@ -223,11 +250,19 @@ func (m *Manager) Ensure(ctx context.Context, w collector.WorkloadKey, cpu, mem 
 	}
 	group := groupList(groups)[0]
 	if !m.managed(group) {
+		if strings.HasPrefix(group, "karpenter:") || m.Cfg.ExternalAutoscaler {
+			who := "the cluster autoscaler"
+			if strings.HasPrefix(group, "karpenter:") {
+				who = "Karpenter (nodepool " + strings.TrimPrefix(group, "karpenter:") + ")"
+			}
+			m.record(group, "delegated", fmt.Sprintf("%s/%s needs %s; %s will add nodes for the Pending pods", w.Namespace, w.Name, need, who))
+			return Fits, ""
+		}
 		where := "these nodes"
 		if group != "" {
 			where = "node group " + group
 		}
-		return Blocked, fmt.Sprintf("not enough free capacity on %s for %s; add nodes, list the node group in --aws-nodegroups, or let Karpenter/Cluster Autoscaler add them", where, need)
+		return Blocked, fmt.Sprintf("not enough free capacity on %s for %s; add nodes, allowlist the node group, or run Karpenter/Cluster Autoscaler (--node-autoscaler-present)", where, need)
 	}
 
 	ready := 0
@@ -272,7 +307,7 @@ func (m *Manager) Ensure(ctx context.Context, w collector.WorkloadKey, cpu, mem 
 	}
 	extra := int(math.Ceil(float64(missing) / float64(perNode)))
 
-	ng, err := m.AWS.DescribeNodegroup(ctx, m.Cfg.Cluster, group)
+	ng, err := m.Provider.DescribeGroup(ctx, group)
 	if err != nil {
 		m.record(group, "failed", "describing node group: "+err.Error())
 		return Blocked, "could not read node group " + group
@@ -280,21 +315,21 @@ func (m *Manager) Ensure(ctx context.Context, w collector.WorkloadKey, cpu, mem 
 	if ng.Status != "" && ng.Status != "ACTIVE" {
 		return Waiting, fmt.Sprintf("node group %s is %s", group, ng.Status)
 	}
-	desired := ng.Scaling.DesiredSize + extra
-	if desired > ng.Scaling.MaxSize {
-		reason := fmt.Sprintf("needs %d more node(s) but %s is at %d of max %d; raise maxSize", extra, group, ng.Scaling.DesiredSize, ng.Scaling.MaxSize)
+	desired := ng.DesiredSize + extra
+	if desired > ng.MaxSize {
+		reason := fmt.Sprintf("needs %d more node(s) but %s is at %d of max %d; raise maxSize", extra, group, ng.DesiredSize, ng.MaxSize)
 		m.record(group, "skipped", reason)
 		return Blocked, reason
 	}
 	if !m.cooledDown(group) {
 		return Waiting, "node group " + group + " changed recently (cooldown)"
 	}
-	reason := fmt.Sprintf("scale %s %d → %d nodes so %s/%s fits (%s)", group, ng.Scaling.DesiredSize, desired, w.Namespace, w.Name, need)
+	reason := fmt.Sprintf("scale %s %d → %d nodes so %s/%s fits (%s)", group, ng.DesiredSize, desired, w.Namespace, w.Name, need)
 	if m.Cfg.DryRun {
 		m.record(group, "dry-run", reason)
 		return Blocked, "would first " + reason
 	}
-	if err := m.AWS.SetDesiredSize(ctx, m.Cfg.Cluster, ng, desired); err != nil {
+	if err := m.Provider.SetDesiredSize(ctx, ng, desired); err != nil {
 		m.record(group, "failed", "scaling up: "+err.Error())
 		return Blocked, "could not scale node group " + group
 	}
@@ -306,7 +341,7 @@ func (m *Manager) Ensure(ctx context.Context, w collector.WorkloadKey, cpu, mem 
 	m.lastChange[group] = m.now()
 	m.mu.Unlock()
 	m.record(group, "applied", reason)
-	return Waiting, fmt.Sprintf("scaling node group %s %d → %d first", group, ng.Scaling.DesiredSize, desired)
+	return Waiting, fmt.Sprintf("scaling node group %s %d → %d first", group, ng.DesiredSize, desired)
 }
 
 func groupList(g map[string]bool) []string {

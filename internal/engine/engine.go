@@ -73,11 +73,12 @@ type Result struct {
 	NodeGroups      NodeGroups                   `json:"nodeGroups"`
 }
 
-// NodeGroups reports AWS node group management.
+// NodeGroups reports node group management and capacity decisions.
 type NodeGroups struct {
-	Enabled     bool             `json:"enabled"`
+	Enabled     bool             `json:"enabled"` // a provider manages node groups
+	Provider    string           `json:"provider,omitempty"`
 	Cluster     string           `json:"cluster,omitempty"`
-	Nodegroups  []string         `json:"nodegroups,omitempty"`
+	Groups      []string         `json:"groups,omitempty"`
 	Consolidate bool             `json:"consolidate"`
 	Events      []capacity.Event `json:"events"`
 }
@@ -107,9 +108,12 @@ type Engine struct {
 	// Act, if set, resizes workloads automatically after each analysis.
 	Act    Actuator
 	ActCfg actuator.Config
-	// Nodes, if set, consolidates AWS node groups after pods are resized.
-	Nodes    Nodes
-	NodesCfg capacity.Config
+	// Nodes, if set, reports capacity decisions and consolidates node groups after pods
+	// are resized.
+	Nodes         Nodes
+	NodesCfg      capacity.Config
+	NodesProvider string // e.g. "aws"; empty: capacity checks only
+	NodesCluster  string
 
 	mu      sync.RWMutex
 	last    *Result
@@ -149,11 +153,12 @@ func (e *Engine) RunOnce(ctx context.Context) (*Result, error) {
 	}
 	if e.Nodes != nil {
 		e.Nodes.Consolidate(ctx) // after pods were resized: shrink nodes second
-		ng := NodeGroups{Enabled: true, Cluster: e.NodesCfg.Cluster, Consolidate: e.NodesCfg.Consolidate, Events: e.Nodes.History()}
-		for g := range e.NodesCfg.Nodegroups {
-			ng.Nodegroups = append(ng.Nodegroups, g)
+		ng := NodeGroups{Enabled: e.NodesProvider != "", Provider: e.NodesProvider, Cluster: e.NodesCluster,
+			Consolidate: e.NodesCfg.Consolidate, Events: e.Nodes.History()}
+		for g := range e.NodesCfg.Groups {
+			ng.Groups = append(ng.Groups, g)
 		}
-		sort.Strings(ng.Nodegroups)
+		sort.Strings(ng.Groups)
 		res.NodeGroups = ng
 	}
 	e.mu.Lock()

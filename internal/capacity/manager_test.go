@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gade-raghav/apva/internal/aws"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/kube"
 )
@@ -35,7 +34,7 @@ func node(name, group string, cpu, mem, gpu string, ready bool) map[string]any {
 		st = "True"
 	}
 	return map[string]any{
-		"metadata": map[string]any{"name": name, "labels": map[string]any{NodegroupLabel: group}, "annotations": map[string]any{}},
+		"metadata": map[string]any{"name": name, "labels": map[string]any{testGroupLabel: group}, "annotations": map[string]any{}},
 		"spec":     map[string]any{"providerID": "aws:///us-east-1a/i-" + name},
 		"status":   map[string]any{"allocatable": alloc, "conditions": []any{map[string]any{"type": "Ready", "status": st}}},
 	}
@@ -109,31 +108,31 @@ func (f *fakeCluster) Create(_ context.Context, path string, _ any) error {
 	return nil
 }
 
+const testGroupLabel = "example.com/nodegroup"
+
+// fakeAWS is a fake Provider.
 type fakeAWS struct {
-	ng         aws.Nodegroup
+	ng         Group
 	desired    []int
 	terminated []string
 }
 
-func (a *fakeAWS) DescribeNodegroup(context.Context, string, string) (aws.Nodegroup, error) {
-	return a.ng, nil
-}
-func (a *fakeAWS) SetDesiredSize(_ context.Context, _ string, _ aws.Nodegroup, d int) error {
+func (a *fakeAWS) Name() string                                         { return "fake" }
+func (a *fakeAWS) GroupLabel() string                                   { return testGroupLabel }
+func (a *fakeAWS) DescribeGroup(context.Context, string) (Group, error) { return a.ng, nil }
+func (a *fakeAWS) SetDesiredSize(_ context.Context, _ Group, d int) error {
 	a.desired = append(a.desired, d)
-	a.ng.Scaling.DesiredSize = d
+	a.ng.DesiredSize = d
 	return nil
 }
-func (a *fakeAWS) TerminateInstance(_ context.Context, id string) error {
-	a.terminated = append(a.terminated, id)
-	a.ng.Scaling.DesiredSize--
+func (a *fakeAWS) RemoveNode(_ context.Context, n *Node) error {
+	a.terminated = append(a.terminated, "i-"+n.Name)
+	a.ng.DesiredSize--
 	return nil
 }
 
 func newAWS(min, max, desired int) *fakeAWS {
-	a := &fakeAWS{}
-	a.ng.Name, a.ng.Status = "gpu", "ACTIVE"
-	a.ng.Scaling.MinSize, a.ng.Scaling.MaxSize, a.ng.Scaling.DesiredSize = min, max, desired
-	return a
+	return &fakeAWS{ng: Group{Name: "gpu", Status: "ACTIVE", MinSize: min, MaxSize: max, DesiredSize: desired}}
 }
 
 type clock struct{ t time.Time }
@@ -142,10 +141,10 @@ func (c *clock) now() time.Time { return c.t }
 
 func newManager(f *fakeCluster, a *fakeAWS, c *clock) *Manager {
 	cfg := DefaultConfig()
-	cfg.Cluster, cfg.Nodegroups = "prod", map[string]bool{"gpu": true}
+	cfg.Groups = map[string]bool{"gpu": true}
 	m := &Manager{K: f, Cfg: cfg, Now: c.now}
 	if a != nil {
-		m.AWS = a
+		m.Provider = a
 	}
 	return m
 }
@@ -226,7 +225,7 @@ func TestBlockedCases(t *testing.T) {
 	})
 	t.Run("node group not in allowlist", func(t *testing.T) {
 		m := newManager(twoNodes(), newAWS(1, 4, 2), &clock{time.Now()})
-		m.Cfg.Nodegroups = map[string]bool{"other": true}
+		m.Cfg.Groups = map[string]bool{"other": true}
 		if d, why := m.Ensure(ctx, inference, 3.5, 4<<30, 2); d != Blocked || !strings.Contains(why, "Karpenter") {
 			t.Fatalf("got %v %q", d, why)
 		}
@@ -279,8 +278,8 @@ func TestConsolidateDrainsAndTerminates(t *testing.T) {
 		t.Fatalf("node c should be cordoned and annotated: %v", f.nodes[2])
 	}
 	m.Consolidate(ctx) // round 2: only the DaemonSet pod is left: terminate i-c
-	if len(a.terminated) != 1 || a.terminated[0] != "i-c" || a.ng.Scaling.DesiredSize != 2 {
-		t.Fatalf("terminated %v, desired %d", a.terminated, a.ng.Scaling.DesiredSize)
+	if len(a.terminated) != 1 || a.terminated[0] != "i-c" || a.ng.DesiredSize != 2 {
+		t.Fatalf("terminated %v, desired %d", a.terminated, a.ng.DesiredSize)
 	}
 	f.nodes = f.nodes[:2]
 	c.t = c.t.Add(time.Minute)
@@ -350,12 +349,66 @@ func TestConsolidateRespectsGuardrails(t *testing.T) {
 
 func TestLoadParsesRequests(t *testing.T) {
 	f := consolidationCluster()
-	cl, err := Load(context.Background(), f)
+	cl, err := Load(context.Background(), f, testGroupLabel)
 	if err != nil {
 		t.Fatal(err)
 	}
 	c := cl.Nodes["c"]
-	if c.InstanceID != "i-c" || c.Group != "gpu" || !c.Ready || fmt.Sprintf("%.3f", c.Requested[CPU]) != "0.525" || c.Requested[Pods] != 2 {
+	if c.ProviderID != "aws:///us-east-1a/i-c" || c.Group != "gpu" || !c.Ready || fmt.Sprintf("%.3f", c.Requested[CPU]) != "0.525" || c.Requested[Pods] != 2 {
 		t.Fatalf("node c = %+v", c)
+	}
+}
+
+func TestKarpenterAndExternalAutoscalerGetTheUpsize(t *testing.T) {
+	ctx := context.Background()
+	t.Run("karpenter detected", func(t *testing.T) {
+		f := twoNodes()
+		for _, n := range f.nodes {
+			n["metadata"].(map[string]any)["labels"] = map[string]any{KarpenterLabel: "gpu-pool"}
+		}
+		m := newManager(f, nil, &clock{time.Now()})
+		if d, why := m.Ensure(ctx, inference, 3.5, 4<<30, 2); d != Fits {
+			t.Fatalf("got %v %q", d, why)
+		}
+		if h := m.History(); len(h) != 1 || h[0].Outcome != "delegated" || !strings.Contains(h[0].Reason, "Karpenter (nodepool gpu-pool)") {
+			t.Fatalf("history %+v", h)
+		}
+	})
+	t.Run("cluster autoscaler flag", func(t *testing.T) {
+		m := newManager(twoNodes(), nil, &clock{time.Now()})
+		m.Cfg.ExternalAutoscaler = true
+		if d, _ := m.Ensure(ctx, inference, 3.5, 4<<30, 2); d != Fits {
+			t.Fatalf("got %v", d)
+		}
+	})
+	t.Run("no autoscaler: blocked", func(t *testing.T) {
+		m := newManager(twoNodes(), nil, &clock{time.Now()})
+		if d, _ := m.Ensure(ctx, inference, 3.5, 4<<30, 2); d != Blocked {
+			t.Fatalf("got %v", d)
+		}
+	})
+}
+
+func TestNoConsolidationRightAfterScaleUpOrWithPendingPods(t *testing.T) {
+	ctx := context.Background()
+	f, a, c := twoNodes(), newAWS(1, 4, 2), &clock{time.Now()}
+	m := newManager(f, a, c)
+	m.Ensure(ctx, inference, 3.5, 4<<30, 2) // scale 2 -> 3
+	f.nodes = append(f.nodes, node("c", "gpu", "4", "16Gi", "1", true))
+	c.t = c.t.Add(time.Hour) // long past the scale-up cooldown
+	if d, _ := m.Ensure(ctx, inference, 3.5, 4<<30, 2); d != Fits {
+		t.Fatal("should fit")
+	}
+	m.Consolidate(ctx) // the new, still empty node c must survive: cooldown restarted
+	if len(f.evicted) != 0 || f.nodes[2]["spec"].(map[string]any)["unschedulable"] == true {
+		t.Fatalf("consolidated the node just added: %+v", m.History())
+	}
+
+	f2 := consolidationCluster()
+	f2.pods = append(f2.pods, pod("shop", "web-5c8d7f9b6-zz2bb", "", "ReplicaSet", "100m", "64Mi", ""))
+	m2 := newManager(f2, newAWS(1, 5, 3), &clock{time.Now()})
+	m2.Consolidate(ctx)
+	if len(f2.evicted) != 0 {
+		t.Fatalf("must not consolidate while a pod is Pending: %v", f2.evicted)
 	}
 }

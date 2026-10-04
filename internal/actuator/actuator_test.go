@@ -173,7 +173,7 @@ func (f *fakeCapacity) Ensure(_ context.Context, _ collector.WorkloadKey, cpu, m
 	return f.d, f.why
 }
 
-func TestCapacityGatesUpsizesOnly(t *testing.T) {
+func TestCapacityGatesEveryResize(t *testing.T) {
 	up := rec(0.1, 0.3, recommender.ActionUpsize, 64<<20, 64<<20, recommender.ActionOK)
 	down := rec(1, 0.05, recommender.ActionDownsize, 512<<20, 512<<20, recommender.ActionOK)
 	for _, c := range []struct {
@@ -186,7 +186,8 @@ func TestCapacityGatesUpsizesOnly(t *testing.T) {
 		{"upsize waits for nodes", up, capacity.Waiting, OutcomeWaiting, true},
 		{"upsize blocked", up, capacity.Blocked, OutcomeSkipped, true},
 		{"upsize fits", up, capacity.Fits, OutcomeApplied, true},
-		{"downsize never asks", down, capacity.Blocked, OutcomeApplied, false},
+		{"downsize asks too (surge pod)", down, capacity.Blocked, OutcomeSkipped, true},
+		{"downsize fits", down, capacity.Fits, OutcomeApplied, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := &fakeAPI{objects: map[string]string{depPath: deployment("", `{"cpu":"`+map[bool]string{true: "100m", false: "1"}[c.r.CPU.Action == recommender.ActionUpsize]+`","memory":"64Mi"}`, "")}}
@@ -201,7 +202,7 @@ func TestCapacityGatesUpsizesOnly(t *testing.T) {
 			if (len(fc.got) > 0) != c.called {
 				t.Fatalf("capacity called = %v, want %v", len(fc.got) > 0, c.called)
 			}
-			if c.called && (fc.got[0] != 0.3 || fc.got[1] != 64<<20) {
+			if c.r.CPU.Action == recommender.ActionUpsize && (fc.got[0] != 0.3 || fc.got[1] != 64<<20) {
 				t.Errorf("capacity asked about cpu=%v mem=%v", fc.got[0], fc.got[1])
 			}
 			if c.outcome != OutcomeApplied && len(f.patches) != 0 {

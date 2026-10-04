@@ -118,3 +118,14 @@ func TestNoCredentials(t *testing.T) {
 		t.Fatal("expected an error without credentials")
 	}
 }
+
+func TestInstanceID(t *testing.T) {
+	if id, err := InstanceID("aws:///us-east-1a/i-0123456789abcdef0"); err != nil || id != "i-0123456789abcdef0" {
+		t.Errorf("got %q %v", id, err)
+	}
+	for _, bad := range []string{"", "kind://docker/kind/kind-control-plane", "aws:///us-east-1a/"} {
+		if _, err := InstanceID(bad); err == nil {
+			t.Errorf("InstanceID(%q) should fail", bad)
+		}
+	}
+}

@@ -19,13 +19,20 @@ import (
 // Eviction API (so PodDisruptionBudgets are respected). Once only DaemonSet pods remain it
 // terminates that exact instance and lowers the group's desired size by one.
 func (m *Manager) Consolidate(ctx context.Context) {
-	if m.AWS == nil || !m.Cfg.Consolidate || len(m.Cfg.Nodegroups) == 0 {
+	if m.Provider == nil || !m.Cfg.Consolidate || len(m.Cfg.Groups) == 0 {
 		return
 	}
-	cl, err := Load(ctx, m.K)
+	cl, err := Load(ctx, m.K, m.groupLabel())
 	if err != nil {
 		m.record("*", "failed", "reading nodes and pods: "+err.Error())
 		return
+	}
+	for _, p := range cl.Pods {
+		if p.Node == "" {
+			// Something is waiting to be scheduled (maybe onto the very nodes we would
+			// remove); like the Cluster Autoscaler, don't scale down meanwhile.
+			return
+		}
 	}
 	byGroup := map[string][]*Node{}
 	for _, n := range cl.Nodes {
@@ -33,8 +40,8 @@ func (m *Manager) Consolidate(ctx context.Context) {
 			byGroup[n.Group] = append(byGroup[n.Group], n)
 		}
 	}
-	groups := make([]string, 0, len(m.Cfg.Nodegroups))
-	for g := range m.Cfg.Nodegroups {
+	groups := make([]string, 0, len(m.Cfg.Groups))
+	for g := range m.Cfg.Groups {
 		groups = append(groups, g)
 	}
 	sort.Strings(groups)
@@ -110,7 +117,7 @@ func (m *Manager) startDrain(ctx context.Context, group string, nodes []*Node) {
 	// Least-used schedulable node first.
 	var cands []*Node
 	for _, n := range nodes {
-		if n.Schedulable() && n.InstanceID != "" && utilisation(n) < m.Cfg.ConsolidateBelow {
+		if n.Schedulable() && n.ProviderID != "" && utilisation(n) < m.Cfg.ConsolidateBelow {
 			cands = append(cands, n)
 		}
 	}
@@ -119,12 +126,12 @@ func (m *Manager) startDrain(ctx context.Context, group string, nodes []*Node) {
 	}
 	sort.SliceStable(cands, func(i, j int) bool { return utilisation(cands[i]) < utilisation(cands[j]) })
 
-	ng, err := m.AWS.DescribeNodegroup(ctx, m.Cfg.Cluster, group)
+	ng, err := m.Provider.DescribeGroup(ctx, group)
 	if err != nil {
 		m.record(group, "failed", "describing node group: "+err.Error())
 		return
 	}
-	if ng.Scaling.DesiredSize-1 < ng.Scaling.MinSize || ready-1 < ng.Scaling.MinSize {
+	if ng.DesiredSize-1 < ng.MinSize || ready-1 < ng.MinSize {
 		return // already at minimum size
 	}
 
@@ -154,7 +161,7 @@ func (m *Manager) startDrain(ctx context.Context, group string, nodes []*Node) {
 			continue
 		}
 		reason := fmt.Sprintf("drain %s (%.0f%% requested, %d pod(s) move to other nodes), then remove it: %s %d → %d nodes",
-			n.Name, utilisation(n)*100, len(pods), group, ng.Scaling.DesiredSize, ng.Scaling.DesiredSize-1)
+			n.Name, utilisation(n)*100, len(pods), group, ng.DesiredSize, ng.DesiredSize-1)
 		if m.Cfg.DryRun {
 			m.record(group, "dry-run", reason)
 			return
@@ -186,12 +193,12 @@ func (m *Manager) continueDrain(ctx context.Context, group string, n *Node) {
 		if m.Cfg.DryRun {
 			return
 		}
-		if err := m.AWS.TerminateInstance(ctx, n.InstanceID); err != nil {
-			m.record(group, "failed", fmt.Sprintf("terminating %s (%s): %v", n.Name, n.InstanceID, err))
+		if err := m.Provider.RemoveNode(ctx, n); err != nil {
+			m.record(group, "failed", fmt.Sprintf("removing %s: %v", n.Name, err))
 			return
 		}
 		m.touch(group)
-		m.record(group, "applied", fmt.Sprintf("removed %s (%s); node group shrinks by one", n.Name, n.InstanceID))
+		m.record(group, "applied", fmt.Sprintf("removed %s; node group shrinks by one", n.Name))
 		return
 	}
 	if !started.IsZero() && m.now().Sub(started) > m.Cfg.DrainTimeout {

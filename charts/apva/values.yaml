@@ -26,6 +26,9 @@ autoResize:
   minConfidence: high    # high needs >= 24h of data; use medium for short windows / demos
   cooldown: 30m
   maxDownStep: 0.5       # shrink at most 50% per step
+  # A Cluster Autoscaler adds nodes for Pending pods, so upsizes that don't fit yet may go
+  # ahead. Karpenter nodes are detected automatically.
+  nodeAutoscalerPresent: false
 
 # Amazon EKS node groups (needs autoResize.enabled). APVA checks that larger pods fit
 # before resizing them; with aws.enabled it scales the listed EKS managed node groups up

@@ -14,7 +14,7 @@ let selected = null;
 const cores = (c) => (c >= 1 ? c.toFixed(2) : Math.round(c * 1000) + "m");
 const mib = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + "Gi" : Math.round(b / (1 << 20)) + "Mi");
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const OUTCOME_VAR = { applied: "--ok", "dry-run": "--hold", waiting: "--hold", skipped: "--muted", failed: "--under" };
+const OUTCOME_VAR = { applied: "--ok", "dry-run": "--hold", waiting: "--hold", delegated: "--hold", skipped: "--muted", failed: "--under" };
 const ago = (t) => {
   const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
   return s < 60 ? Math.round(s) + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : Math.round(s / 3600) + "h ago";
@@ -64,9 +64,11 @@ function render() {
   const ng = data.nodeGroups || { enabled: false, events: [] };
   const feed = [
     ...(ar.events || []).map((ev) => ({ ...ev, who: ev.workload.namespace + "/" + ev.workload.name })),
-    ...(ng.events || []).map((ev) => ({ ...ev, who: "node group " + ev.nodegroup })),
+    ...(ng.events || []).map((ev) => ({ ...ev, who: "node group " + ev.group })),
   ].sort((a, b) => new Date(b.time) - new Date(a.time));
-  $("activity-title").textContent = ng.enabled ? `Auto-resize activity · EKS ${ng.cluster}: ${(ng.nodegroups || []).join(", ")}` : "Auto-resize activity";
+  $("activity-title").textContent = ng.enabled
+    ? `Auto-resize activity · ${ng.provider === "aws" ? "EKS" : ng.provider} ${ng.cluster}: ${(ng.groups || []).join(", ")}`
+    : "Auto-resize activity";
   $("activity").innerHTML = feed.length
     ? feed.slice(0, 30).map((ev) => `<li><time datetime="${esc(ev.time)}">${ago(ev.time)}</time>
         ${outcome(ev.outcome)} <strong>${esc(ev.who)}</strong>

@@ -12,7 +12,6 @@ package capacity
 
 import (
 	"context"
-	"strings"
 
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/kube"
@@ -26,8 +25,8 @@ const (
 	Pods   = "pods"           // pod slots
 )
 
-// NodegroupLabel is set by EKS on every node of a managed node group.
-const NodegroupLabel = "eks.amazonaws.com/nodegroup"
+// KarpenterLabel is set by Karpenter on the nodes it provisions.
+const KarpenterLabel = "karpenter.sh/nodepool"
 
 // Resources maps a resource name to a quantity.
 type Resources map[string]float64
@@ -69,7 +68,8 @@ type Pod struct {
 
 // Node is the part of a node the planner needs.
 type Node struct {
-	Name, Group, InstanceID string
+	Name, Group, ProviderID string
+	Karpenter               bool // provisioned by Karpenter (Group is then "karpenter:<nodepool>")
 	Ready, Unschedulable    bool
 	Allocatable, Requested  Resources
 	Annotations             map[string]string
@@ -111,8 +111,9 @@ func parse(rl resourceList) Resources {
 	return out
 }
 
-// Load reads all nodes and active pods.
-func Load(ctx context.Context, k API) (*Cluster, error) {
+// Load reads all nodes and active pods. groupLabel is the node label that names a node's
+// group (a provider's GroupLabel); nodes Karpenter provisioned are grouped by nodepool.
+func Load(ctx context.Context, k API, groupLabel string) (*Cluster, error) {
 	var nodes struct {
 		Items []struct {
 			Metadata struct {
@@ -139,13 +140,15 @@ func Load(ctx context.Context, k API) (*Cluster, error) {
 	cl := &Cluster{Nodes: map[string]*Node{}}
 	for _, it := range nodes.Items {
 		n := &Node{
-			Name: it.Metadata.Name, Group: it.Metadata.Labels[NodegroupLabel],
+			Name: it.Metadata.Name, ProviderID: it.Spec.ProviderID,
 			Unschedulable: it.Spec.Unschedulable, Allocatable: parse(it.Status.Allocatable),
 			Requested: Resources{}, Annotations: it.Metadata.Annotations,
 		}
-		// providerID: aws:///us-east-1a/i-0123456789abcdef0
-		if strings.HasPrefix(it.Spec.ProviderID, "aws://") {
-			n.InstanceID = it.Spec.ProviderID[strings.LastIndex(it.Spec.ProviderID, "/")+1:]
+		if groupLabel != "" {
+			n.Group = it.Metadata.Labels[groupLabel]
+		}
+		if pool := it.Metadata.Labels[KarpenterLabel]; pool != "" {
+			n.Group, n.Karpenter = "karpenter:"+pool, true
 		}
 		for _, c := range it.Status.Conditions {
 			if c.Type == "Ready" {

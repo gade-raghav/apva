@@ -1,4 +1,4 @@
-# APVA on Amazon EKS: node-aware resizing
+# Node-aware resizing (Amazon EKS provider)
 
 Resizing pods is only half the job. A bigger pod that no node can hold sits in `Pending`;
 smaller pods only save money once the nodes they free up are gone. With `aws.enabled`, APVA
@@ -10,8 +10,19 @@ right order:
 | **Up** (pods need more) | nodes first, then pods | Checks the larger pods fit on the node group. If not, raises the group's desired size, waits until the new nodes are `Ready` and the pods fit, then resizes the pods. |
 | **Down** (pods need less) | pods first, then nodes | Resizes the pods. Then picks the least-used node, checks every pod on it fits on the other nodes, cordons it, evicts its pods through the Eviction API, and terminates **exactly that instance** while lowering the desired size by one. |
 
-Without `aws.enabled`, auto-resize still runs the capacity check and **refuses an upsize
-that would leave pods `Pending`**, telling you why (see the dashboard's activity log).
+Every resize is a rolling update, so even a *downsize* needs room for the rollout's first
+new pod. APVA checks that before every resize, on every cluster:
+
+| Where the workload's nodes come from | What APVA does when the new pods won't fit |
+|---|---|
+| A node group APVA manages (`aws.nodegroups`) | adds nodes first, as above |
+| **Karpenter** (nodes labelled `karpenter.sh/nodepool`, detected automatically) | resizes anyway: Karpenter provisions nodes for the Pending pods |
+| A Cluster Autoscaler (`autoResize.nodeAutoscalerPresent=true`) | resizes anyway: the autoscaler adds nodes |
+| Anything else | doesn't resize, and says why in the activity log |
+
+Node management sits behind a small provider interface (`capacity.Provider`: describe a
+group, set its size, remove one node). Amazon EKS managed node groups are the first
+provider; other clouds implement the same four calls.
 
 ## Guardrails
 
@@ -92,6 +103,16 @@ Kubernetes permissions added by `aws.enabled`: `patch` on nodes (cordon) and `cr
 | `--aws-scale-up-timeout` | `15m` | |
 | `--aws-drain-timeout` | `10m` | |
 | `--aws-nodegroup-cooldown` | `10m` | |
+
+## Testing without an AWS account
+
+`.github/workflows/e2e-aws.yml` runs on every pull request: a real Kubernetes control
+plane (k3s, no kubelet), [KWOK](https://kwok.sigs.k8s.io) simulating the nodes and pods, and
+`test/e2e-aws/fake.py` playing EKS, Auto Scaling and Prometheus. The fake node group creates
+and deletes KWOK nodes, so APVA's whole cycle runs against real scheduling, rollouts and
+evictions: scale the group up before a resize, roll the pods onto the new node, remove the
+node left empty, then shrink the pods and drain the group down to its minimum. Run it
+locally with `make e2e-aws` against any cluster with KWOK.
 
 ## Not yet
 

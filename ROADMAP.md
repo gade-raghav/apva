@@ -14,6 +14,9 @@
 - [x] EKS managed node groups: scale up before pods grow, wait for Ready nodes
 - [x] Consolidation after pods shrink: PDB-respecting drain, terminate exactly the drained instance
 - [x] EKS Pod Identity / IRSA credentials, no AWS SDK dependency
+- [x] Pluggable node provider (EKS first); Karpenter / Cluster Autoscaler aware
+- [x] Simulated EKS end-to-end test in CI (k3s + KWOK + fake AWS), no AWS account needed
+- [ ] Real-EKS end-to-end run (needs an AWS account)
 - [ ] Instance-type changes (launch template versions), e.g. A10G → H100
 - [ ] Self-managed node groups
 

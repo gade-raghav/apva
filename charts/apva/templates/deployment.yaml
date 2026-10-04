@@ -44,6 +44,9 @@ spec:
             {{- if .Values.autoResize.dryRun }}
             - --auto-resize-dry-run
             {{- end }}
+            {{- if .Values.autoResize.nodeAutoscalerPresent }}
+            - --node-autoscaler-present
+            {{- end }}
             {{- if .Values.aws.enabled }}
             - --aws-cluster={{ required "aws.cluster is required when aws.enabled" .Values.aws.cluster }}
             - --aws-region={{ required "aws.region is required when aws.enabled" .Values.aws.region }}
