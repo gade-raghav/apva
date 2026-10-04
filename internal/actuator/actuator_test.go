@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gade-raghav/apva/internal/capacity"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/kube"
 	"github.com/gade-raghav/apva/internal/recommender"
@@ -158,5 +159,55 @@ func TestLowConfidenceAndNoOpSkipped(t *testing.T) {
 	h := a.History()
 	if len(h) != 1 || !strings.Contains(h[0].Reason, "confidence medium") {
 		t.Fatalf("history = %+v", h)
+	}
+}
+
+type fakeCapacity struct {
+	d   capacity.Decision
+	why string
+	got []float64
+}
+
+func (f *fakeCapacity) Ensure(_ context.Context, _ collector.WorkloadKey, cpu, mem float64, _ int) (capacity.Decision, string) {
+	f.got = append(f.got, cpu, mem)
+	return f.d, f.why
+}
+
+func TestCapacityGatesEveryResize(t *testing.T) {
+	up := rec(0.1, 0.3, recommender.ActionUpsize, 64<<20, 64<<20, recommender.ActionOK)
+	down := rec(1, 0.05, recommender.ActionDownsize, 512<<20, 512<<20, recommender.ActionOK)
+	for _, c := range []struct {
+		name    string
+		r       recommender.Recommendation
+		d       capacity.Decision
+		outcome string
+		called  bool
+	}{
+		{"upsize waits for nodes", up, capacity.Waiting, OutcomeWaiting, true},
+		{"upsize blocked", up, capacity.Blocked, OutcomeSkipped, true},
+		{"upsize fits", up, capacity.Fits, OutcomeApplied, true},
+		{"downsize asks too (surge pod)", down, capacity.Blocked, OutcomeSkipped, true},
+		{"downsize fits", down, capacity.Fits, OutcomeApplied, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := &fakeAPI{objects: map[string]string{depPath: deployment("", `{"cpu":"`+map[bool]string{true: "100m", false: "1"}[c.r.CPU.Action == recommender.ActionUpsize]+`","memory":"64Mi"}`, "")}}
+			fc := &fakeCapacity{d: c.d, why: "because"}
+			a := newActuator(f)
+			a.Capacity = fc
+			a.Apply(context.Background(), []recommender.Recommendation{c.r})
+			h := a.History()
+			if len(h) != 1 || h[0].Outcome != c.outcome {
+				t.Fatalf("history %+v, want %s", h, c.outcome)
+			}
+			if (len(fc.got) > 0) != c.called {
+				t.Fatalf("capacity called = %v, want %v", len(fc.got) > 0, c.called)
+			}
+			if c.r.CPU.Action == recommender.ActionUpsize && (fc.got[0] != 0.3 || fc.got[1] != 64<<20) {
+				t.Errorf("capacity asked about cpu=%v mem=%v", fc.got[0], fc.got[1])
+			}
+			if c.outcome != OutcomeApplied && len(f.patches) != 0 {
+				t.Errorf("must not patch when capacity says %v", c.d)
+			}
+		})
 	}
 }

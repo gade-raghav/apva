@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gade-raghav/apva/internal/capacity"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/kube"
 	"github.com/gade-raghav/apva/internal/recommender"
@@ -46,7 +47,15 @@ const (
 	OutcomeDryRun  = "dry-run"
 	OutcomeSkipped = "skipped"
 	OutcomeFailed  = "failed"
+	OutcomeWaiting = "waiting" // waiting for node capacity before resizing
 )
+
+// Capacity is consulted before every resize (the rolling update needs room for its surge
+// pod even when shrinking); implemented by *capacity.Manager. cpu and mem are the new
+// per-pod totals.
+type Capacity interface {
+	Ensure(ctx context.Context, w collector.WorkloadKey, cpu, mem float64, replicas int) (capacity.Decision, string)
+}
 
 // Config tunes the actuator.
 type Config struct {
@@ -88,8 +97,10 @@ type API interface {
 type Actuator struct {
 	K   API
 	Cfg Config
-	Log *slog.Logger
-	Now func() time.Time // for tests
+	// Capacity, if set, must agree that larger pods will fit (and may add nodes first).
+	Capacity Capacity
+	Log      *slog.Logger
+	Now      func() time.Time // for tests
 
 	mu      sync.Mutex
 	history []Event // newest first
@@ -212,7 +223,7 @@ func (a *Actuator) decide(ctx context.Context, r recommender.Recommendation, hpa
 	}
 	if ts := w.Metadata.Annotations[AnnoLastResized]; ts != "" {
 		if t, err := time.Parse(time.RFC3339, ts); err == nil && a.now().Sub(t) < a.Cfg.Cooldown {
-			ev.Reason = fmt.Sprintf("cooldown: resized %s ago (cooldown %s)", a.now().Sub(t).Round(time.Second), a.Cfg.Cooldown)
+			ev.Reason = fmt.Sprintf("cooldown: resized at %s UTC, next change after %s UTC", t.UTC().Format("15:04:05"), t.Add(a.Cfg.Cooldown).UTC().Format("15:04:05"))
 			return ev, true
 		}
 	}
@@ -299,6 +310,26 @@ func (a *Actuator) decide(ctx context.Context, r recommender.Recommendation, hpa
 			ev.Reason = "change is too small after rounding"
 		}
 		return ev, true
+	}
+
+	// Every resize is a rolling update: even a downsize needs room for the surge pod, or
+	// the rollout stalls with a Pending pod. Ask the capacity planner first.
+	if a.Capacity != nil {
+		cpu, mem := r.CPU.Current, r.Memory.Current
+		if ev.CPU != nil {
+			cpu = ev.CPU.To
+		}
+		if ev.Memory != nil {
+			mem = ev.Memory.To
+		}
+		switch d, why := a.Capacity.Ensure(ctx, r.Workload, cpu, mem, r.Replicas); d {
+		case capacity.Waiting:
+			ev.Outcome, ev.Reason = OutcomeWaiting, why
+			return ev, true
+		case capacity.Blocked:
+			ev.Reason = why
+			return ev, true
+		}
 	}
 
 	ev.Reason = describe(ev, capped)

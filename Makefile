@@ -4,7 +4,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 IMG ?= ghcr.io/gade-raghav/apva:$(VERSION)
 PROMETHEUS_URL ?= http://localhost:9090
 
-.PHONY: all build test lint run demo demo-cluster demo-down image e2e clean
+.PHONY: all build test lint run demo demo-cluster demo-down image e2e e2e-aws clean
 all: lint test build
 
 build:
@@ -34,6 +34,10 @@ image:
 
 e2e:
 	./test/e2e/run.sh
+
+# Needs a cluster in $KUBECONFIG with KWOK running; see .github/workflows/e2e-aws.yml.
+e2e-aws:
+	./test/e2e-aws/run.sh
 
 clean:
 	rm -rf bin dist

@@ -15,6 +15,7 @@ A workload is resized only when **all** of these hold:
 | Not annotated `apva.io/auto-resize: "off"` | always | per-workload opt-out |
 | Running pods match the spec | always | never stack a change on an unfinished rollout |
 | Not resized within `--auto-resize-cooldown` | `30m` | let new pods produce data first |
+| Larger pods fit on the nodes (upsizes only) | always | never resize pods into `Pending`; on EKS APVA can add nodes first — see [aws.md](aws.md) |
 
 And every change is bounded:
 
@@ -43,7 +44,8 @@ To undo a change: `kubectl rollout undo deploy/<name>` (or set the requests from
 
 With `autoResize.enabled=true` the chart mounts a service account token and creates a
 ClusterRole allowing `get/list/patch` on `deployments` and `statefulsets` and `get/list` on
-`horizontalpodautoscalers`. Nothing else.
+`horizontalpodautoscalers`, and `get/list` on `pods` and `nodes` for the capacity check.
+`aws.enabled` adds node cordoning and pod eviction ([aws.md](aws.md)).
 
 Running outside the cluster: start `kubectl proxy` and pass `--kube-api=http://127.0.0.1:8001`.
 

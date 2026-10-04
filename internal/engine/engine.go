@@ -7,10 +7,12 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/gade-raghav/apva/internal/actuator"
+	"github.com/gade-raghav/apva/internal/capacity"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/recommender"
 )
@@ -68,6 +70,23 @@ type Result struct {
 	Graph           Graph                        `json:"graph"`
 	Warnings        []string                     `json:"warnings,omitempty"`
 	AutoResize      AutoResize                   `json:"autoResize"`
+	NodeGroups      NodeGroups                   `json:"nodeGroups"`
+}
+
+// NodeGroups reports node group management and capacity decisions.
+type NodeGroups struct {
+	Enabled     bool             `json:"enabled"` // a provider manages node groups
+	Provider    string           `json:"provider,omitempty"`
+	Cluster     string           `json:"cluster,omitempty"`
+	Groups      []string         `json:"groups,omitempty"`
+	Consolidate bool             `json:"consolidate"`
+	Events      []capacity.Event `json:"events"`
+}
+
+// Nodes manages node capacity; implemented by *capacity.Manager.
+type Nodes interface {
+	Consolidate(ctx context.Context)
+	History() []capacity.Event
 }
 
 // Collector is what the engine needs from a data source.
@@ -89,6 +108,12 @@ type Engine struct {
 	// Act, if set, resizes workloads automatically after each analysis.
 	Act    Actuator
 	ActCfg actuator.Config
+	// Nodes, if set, reports capacity decisions and consolidates node groups after pods
+	// are resized.
+	Nodes         Nodes
+	NodesCfg      capacity.Config
+	NodesProvider string // e.g. "aws"; empty: capacity checks only
+	NodesCluster  string
 
 	mu      sync.RWMutex
 	last    *Result
@@ -125,6 +150,16 @@ func (e *Engine) RunOnce(ctx context.Context) (*Result, error) {
 			}
 		}
 		res.Summary.AutoResized = len(resized)
+	}
+	if e.Nodes != nil {
+		e.Nodes.Consolidate(ctx) // after pods were resized: shrink nodes second
+		ng := NodeGroups{Enabled: e.NodesProvider != "", Provider: e.NodesProvider, Cluster: e.NodesCluster,
+			Consolidate: e.NodesCfg.Consolidate, Events: e.Nodes.History()}
+		for g := range e.NodesCfg.Groups {
+			ng.Groups = append(ng.Groups, g)
+		}
+		sort.Strings(ng.Groups)
+		res.NodeGroups = ng
 	}
 	e.mu.Lock()
 	e.last, e.lastErr = res, nil

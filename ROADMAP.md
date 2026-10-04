@@ -9,6 +9,17 @@
 - [x] Helm chart, CI, kind-based e2e
 - [x] Opt-in automatic resizing of Deployments/StatefulSets with guardrails (pulled forward from v1.0)
 
+## Release 1 — AWS (v0.3)
+- [x] Capacity check before any upsize: never resize pods into `Pending`
+- [x] EKS managed node groups: scale up before pods grow, wait for Ready nodes
+- [x] Consolidation after pods shrink: PDB-respecting drain, terminate exactly the drained instance
+- [x] EKS Pod Identity / IRSA credentials, no AWS SDK dependency
+- [x] Pluggable node provider (EKS first); Karpenter / Cluster Autoscaler aware
+- [x] Simulated EKS end-to-end test in CI (k3s + KWOK + fake AWS), no AWS account needed
+- [ ] Real-EKS end-to-end run (needs an AWS account)
+- [ ] Instance-type changes (launch template versions), e.g. A10G → H100
+- [ ] Self-managed node groups
+
 ## v0.2 — Integrate
 - [ ] `Recommendation` custom resource written by an in-cluster controller
 - [ ] Export recommendations as VPA objects (recommend-only mode) and KEDA hints

@@ -26,6 +26,29 @@ autoResize:
   minConfidence: high    # high needs >= 24h of data; use medium for short windows / demos
   cooldown: 30m
   maxDownStep: 0.5       # shrink at most 50% per step
+  # A Cluster Autoscaler adds nodes for Pending pods, so upsizes that don't fit yet may go
+  # ahead. Karpenter nodes are detected automatically.
+  nodeAutoscalerPresent: false
+
+# Amazon EKS node groups (needs autoResize.enabled). APVA checks that larger pods fit
+# before resizing them; with aws.enabled it scales the listed EKS managed node groups up
+# first (and waits for the nodes), and after downsizing it drains under-used nodes and
+# removes exactly those instances. See docs/aws.md for the IAM policy.
+aws:
+  enabled: false
+  cluster: ""            # EKS cluster name
+  region: ""             # e.g. us-east-1
+  nodegroups: ""         # comma-separated allowlist of managed node groups APVA may scale
+  consolidate: true      # drain and remove under-used nodes
+  consolidateBelow: 0.5  # candidate when CPU, memory and GPU requests are all below 50%
+  scaleUpTimeout: 15m
+  drainTimeout: 10m
+  cooldown: 10m          # between two changes to one node group
+
+# IRSA: eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role>
+# (with EKS Pod Identity, create the association instead; no annotation needed)
+serviceAccount:
+  annotations: {}
 
 # Run with the built-in sample cluster (no Prometheus needed) — for demos.
 demo: false

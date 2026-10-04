@@ -1,0 +1,21 @@
+# Copyright 2026 Raghav Gade
+# SPDX-License-Identifier: Apache-2.0
+# A workload pinned to the fake EKS node group "gpu" (nodes are KWOK nodes).
+apiVersion: v1
+kind: Namespace
+metadata: {name: shop}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: web, namespace: shop}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: web}}
+  template:
+    metadata: {labels: {app: web}}
+    spec:
+      nodeSelector: {eks.amazonaws.com/nodegroup: gpu}
+      containers:
+        - name: app
+          image: fake-image # KWOK nodes never pull images
+          resources: {requests: {cpu: "1", memory: 256Mi}}
