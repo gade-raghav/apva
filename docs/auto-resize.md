@@ -15,7 +15,7 @@ A workload is resized only when **all** of these hold:
 | Not annotated `apva.io/auto-resize: "off"` | always | per-workload opt-out |
 | Running pods match the spec | always | never stack a change on an unfinished rollout |
 | Not resized within `--auto-resize-cooldown` | `30m` | let new pods produce data first |
-| Larger pods fit on the nodes (upsizes only) | always | never resize pods into `Pending`; on EKS APVA can add nodes first — see [aws.md](aws.md) |
+| The new pods fit on the nodes, including the rollout's surge pod | always, upsizes **and** downsizes | never leave pods `Pending`. Karpenter / Cluster Autoscaler add nodes, or the EKS provider adds them first. See [aws.md](aws.md) |
 
 And every change is bounded:
 
@@ -26,6 +26,19 @@ And every change is bounded:
 - Workloads whose recommendation is `hold` (callers' traffic is rising) are never shrunk.
 
 Use `--auto-resize-dry-run` to see every decision in the dashboard without changing anything.
+
+## Outcomes in the activity log
+
+| Outcome | Meaning |
+|---|---|
+| `applied` | the workload was patched; a rolling update follows |
+| `dry-run` | it would have been patched |
+| `waiting` | nodes are being added first; APVA retries next round |
+| `skipped` | a guardrail said no; the reason says which |
+| `failed` | an API call failed; the reason has the error |
+
+See [configuration.md](configuration.md) for every flag and annotation, and
+[architecture.md](architecture.md#2-the-actuator-auto-resize) for the exact order of checks.
 
 ## What APVA writes
 

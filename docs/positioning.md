@@ -12,10 +12,12 @@ It consumes data other projects produce and emits recommendations other projects
 
 | Project | What it does | Relationship to APVA |
 |---|---|---|
-| Kubernetes HPA | Scales replica count on metrics | APVA can suggest targets; HPA acts |
+| Kubernetes HPA | Scales replica count on metrics | APVA sizes pods, the HPA sizes the count. Auto-resize skips HPA-managed workloads (the HPA target already gives headroom) |
 | Kubernetes VPA | Recommends/sets CPU & memory requests per workload | Closest overlap. APVA adds GPU, the service graph, and cross-workload context; can export VPA-compatible recommendations |
-| KEDA (CNCF graduated) | Event-driven autoscaling | APVA can provide scaling hints / scalers; KEDA acts |
-| Karpenter | Node provisioning | Operates at node level; APVA at workload level. Better requests → better bin-packing |
+| KEDA (CNCF graduated) | Event-driven horizontal scaling (incl. scale to zero) | KEDA decides *how many* pods, APVA *how big*. KEDA works through an HPA, so auto-resize leaves KEDA-scaled workloads alone; scaling hints for KEDA are on the roadmap |
+| Karpenter | Node provisioning and consolidation | Detected automatically: APVA resizes pods, Karpenter adds and consolidates nodes. Better requests → better bin-packing |
+| Cluster Autoscaler | Node group scaling for Pending pods | With `--node-autoscaler-present`, APVA resizes and the autoscaler adds nodes. Don't allowlist the same node groups in APVA's EKS provider |
+| EKS managed node groups (no autoscaler) | Fixed-size groups | APVA's EKS provider grows a group before resizing pods and drains + removes under-used nodes afterwards |
 | OpenCost (CNCF incubating) | Cost allocation & monitoring | Planned integration for cost of waste; APVA focuses on the "what size should it be" question |
 | Goldilocks, Robusta KRR | Per-workload request recommendations | Single-workload, CPU/memory only. APVA adds GPU + dependency context |
 | Cilium Hubble, Pixie, Kiali | Network/service visibility | APVA **consumes** Hubble flow metrics; it's not a network observability tool |
@@ -29,6 +31,14 @@ It consumes data other projects produce and emits recommendations other projects
    even if its own recent usage is low.
 3. **Coordinated scaling (roadmap)** — predicted load can be propagated down the graph so
    downstream services are ready before traffic arrives.
+
+## Why node-awareness matters
+
+Resizing pods changes how many nodes you need. Most recommenders stop at the pod. A bigger
+pod that no node can hold sits in `Pending`, and even a smaller pod's rolling update needs
+room for its surge pod. APVA checks every resize against real node capacity. It either
+hands the node change to the autoscaler you already run, or (on EKS without one) makes it
+itself, in the safe order: nodes first when growing, pods first when shrinking.
 
 ## Why GPU matters
 

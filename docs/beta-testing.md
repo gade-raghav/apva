@@ -1,8 +1,8 @@
 # APVA beta testing guide
 
 Thanks for helping test APVA! This takes about 10 minutes if your cluster already runs
-Prometheus. APVA is **read-only**: it only queries Prometheus and never changes your
-workloads.
+Prometheus. By default APVA is **read-only**: it only queries Prometheus and never changes
+your workloads. Auto-resize and node management are separate opt-ins.
 
 ## What you need
 
@@ -39,7 +39,7 @@ kubectl -n apva port-forward svc/apva 8080:8080
 open http://localhost:8080
 ```
 
-This pulls the public image `ghcr.io/gade-raghav/apva:v0.2.0` (amd64 and arm64). APVA stays
+This pulls the public image `ghcr.io/gade-raghav/apva:v0.3.0` (amd64 and arm64). APVA stays
 read-only unless you add `--set autoResize.enabled=true` (see [auto-resize](auto-resize.md);
 try `--set autoResize.dryRun=true` first).
 
@@ -63,9 +63,15 @@ Please open a GitHub issue with the label `beta-feedback` (or reply in Slack) co
 
 Please don't share cluster names or anything sensitive in public issues.
 
-## Known limitations (v0.1)
+## Known limitations (v0.3)
 
 - Workload names are derived from pod names; unusual naming may group pods oddly.
 - Recommendations are per pod and based on p95 over the window; very spiky workloads may
   need a longer window.
-- No automatic apply — by design, for now.
+- Auto-resize and node management are opt-in and **experimental**. Start with
+  `autoResize.dryRun=true`.
+- The Amazon EKS provider has been tested against a simulated EKS (see
+  [testing.md](testing.md)), not yet a real account. Instance-type changes are not
+  supported.
+- GPU analysis has only been tested with sample data. Testers with NVIDIA GPUs and the DCGM
+  exporter are especially welcome.
