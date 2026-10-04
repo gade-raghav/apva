@@ -7,10 +7,12 @@ package engine
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/gade-raghav/apva/internal/actuator"
+	"github.com/gade-raghav/apva/internal/capacity"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/recommender"
 )
@@ -68,6 +70,22 @@ type Result struct {
 	Graph           Graph                        `json:"graph"`
 	Warnings        []string                     `json:"warnings,omitempty"`
 	AutoResize      AutoResize                   `json:"autoResize"`
+	NodeGroups      NodeGroups                   `json:"nodeGroups"`
+}
+
+// NodeGroups reports AWS node group management.
+type NodeGroups struct {
+	Enabled     bool             `json:"enabled"`
+	Cluster     string           `json:"cluster,omitempty"`
+	Nodegroups  []string         `json:"nodegroups,omitempty"`
+	Consolidate bool             `json:"consolidate"`
+	Events      []capacity.Event `json:"events"`
+}
+
+// Nodes manages node capacity; implemented by *capacity.Manager.
+type Nodes interface {
+	Consolidate(ctx context.Context)
+	History() []capacity.Event
 }
 
 // Collector is what the engine needs from a data source.
@@ -89,6 +107,9 @@ type Engine struct {
 	// Act, if set, resizes workloads automatically after each analysis.
 	Act    Actuator
 	ActCfg actuator.Config
+	// Nodes, if set, consolidates AWS node groups after pods are resized.
+	Nodes    Nodes
+	NodesCfg capacity.Config
 
 	mu      sync.RWMutex
 	last    *Result
@@ -125,6 +146,15 @@ func (e *Engine) RunOnce(ctx context.Context) (*Result, error) {
 			}
 		}
 		res.Summary.AutoResized = len(resized)
+	}
+	if e.Nodes != nil {
+		e.Nodes.Consolidate(ctx) // after pods were resized: shrink nodes second
+		ng := NodeGroups{Enabled: true, Cluster: e.NodesCfg.Cluster, Consolidate: e.NodesCfg.Consolidate, Events: e.Nodes.History()}
+		for g := range e.NodesCfg.Nodegroups {
+			ng.Nodegroups = append(ng.Nodegroups, g)
+		}
+		sort.Strings(ng.Nodegroups)
+		res.NodeGroups = ng
 	}
 	e.mu.Lock()
 	e.last, e.lastErr = res, nil

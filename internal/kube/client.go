@@ -21,8 +21,27 @@ import (
 	"time"
 )
 
-// ErrNotFound is returned when the API server answers 404.
+// ErrNotFound is returned (wrapped in a StatusError) when the API server answers 404.
 var ErrNotFound = errors.New("not found")
+
+// StatusError is a non-2xx answer from the API server.
+type StatusError struct {
+	Code    int
+	Message string
+}
+
+func (e *StatusError) Error() string { return fmt.Sprintf("%d: %s", e.Code, e.Message) }
+
+// Is makes errors.Is(err, ErrNotFound) work for 404s.
+func (e *StatusError) Is(target error) bool {
+	return target == ErrNotFound && e.Code == http.StatusNotFound
+}
+
+// IsStatus reports whether err is a StatusError with the given HTTP code.
+func IsStatus(err error, code int) bool {
+	var se *StatusError
+	return errors.As(err, &se) && se.Code == code
+}
 
 const saDir = "/var/run/secrets/kubernetes.io/serviceaccount"
 
@@ -67,6 +86,15 @@ func (c *Client) Get(ctx context.Context, path string, out any) error {
 	return c.do(ctx, http.MethodGet, path, "", nil, out)
 }
 
+// Create POSTs a JSON body to path (e.g. a pod eviction).
+func (c *Client) Create(ctx context.Context, path string, body any) error {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, http.MethodPost, path, "application/json", b, nil)
+}
+
 // StrategicMergePatch applies a strategic merge patch to path.
 func (c *Client) StrategicMergePatch(ctx context.Context, path string, patch any) error {
 	b, err := json.Marshal(patch)
@@ -106,9 +134,6 @@ func (c *Client) do(ctx context.Context, method, path, ctype string, body []byte
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode == http.StatusNotFound {
-		return ErrNotFound
-	}
 	if resp.StatusCode/100 != 2 {
 		var st struct {
 			Message string `json:"message"`
@@ -117,7 +142,7 @@ func (c *Client) do(ctx context.Context, method, path, ctype string, body []byte
 		if st.Message == "" {
 			st.Message = strings.TrimSpace(string(data))
 		}
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, st.Message)
+		return fmt.Errorf("%s %s: %w", method, path, &StatusError{Code: resp.StatusCode, Message: st.Message})
 	}
 	if out != nil {
 		return json.Unmarshal(data, out)

@@ -44,6 +44,16 @@ spec:
             {{- if .Values.autoResize.dryRun }}
             - --auto-resize-dry-run
             {{- end }}
+            {{- if .Values.aws.enabled }}
+            - --aws-cluster={{ required "aws.cluster is required when aws.enabled" .Values.aws.cluster }}
+            - --aws-region={{ required "aws.region is required when aws.enabled" .Values.aws.region }}
+            - --aws-nodegroups={{ required "aws.nodegroups is required when aws.enabled" .Values.aws.nodegroups }}
+            - --aws-consolidate={{ .Values.aws.consolidate }}
+            - --aws-consolidate-below={{ .Values.aws.consolidateBelow }}
+            - --aws-scale-up-timeout={{ .Values.aws.scaleUpTimeout }}
+            - --aws-drain-timeout={{ .Values.aws.drainTimeout }}
+            - --aws-nodegroup-cooldown={{ .Values.aws.cooldown }}
+            {{- end }}
             {{- end }}
             {{- if .Values.demo }}
             - --demo

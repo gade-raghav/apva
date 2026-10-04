@@ -1,5 +1,7 @@
 {{- if .Values.autoResize.enabled }}
-# Permissions for automatic resizing: read and patch Deployments/StatefulSets, read HPAs.
+# Permissions for automatic resizing: read and patch Deployments/StatefulSets, read HPAs,
+# and read nodes/pods to check that resized pods will fit. With aws.enabled, also cordon
+# nodes and evict pods (the Eviction API respects PodDisruptionBudgets) to consolidate.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -12,6 +14,17 @@ rules:
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
     verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"{{ if .Values.aws.enabled }}, "patch"{{ end }}]
+  {{- if .Values.aws.enabled }}
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
