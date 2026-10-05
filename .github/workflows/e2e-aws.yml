@@ -1,9 +1,11 @@
 # Copyright 2026 Raghav Gade
 # SPDX-License-Identifier: Apache-2.0
 #
-# AWS end-to-end test, no AWS account needed: a real Kubernetes control plane (k3s with no
-# agent), KWOK simulating the nodes, and a fake EKS / Auto Scaling / Prometheus endpoint
-# (test/e2e-aws/fake.py). Exercises scale-up-before-resize and drain-then-remove.
+# AWS end-to-end test, no AWS account needed: a real Kubernetes 1.35 control plane (k3s
+# with no agent), KWOK simulating the nodes, and a fake EKS / Auto Scaling / Prometheus
+# endpoint (test/e2e-aws/fake.py). APVA runs as its own ServiceAccount with the chart's
+# RBAC and admission policies. Exercises in-place resize, rollout fallback with
+# scale-up-before-resize, drain-then-remove, and that the policies deny everything else.
 name: E2E (AWS, simulated)
 on:
   push: {branches: [main]}
@@ -11,7 +13,7 @@ on:
   workflow_dispatch:
 permissions: {contents: read}
 env:
-  K3S_VERSION: v1.32.2+k3s1
+  K3S_VERSION: v1.35.2+k3s1
   KWOK_VERSION: v0.7.0
 jobs:
   eks-simulated:
@@ -21,6 +23,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version-file: go.mod}
+      - uses: azure/setup-helm@v4
       - name: Start a Kubernetes control plane (k3s, no kubelet)
         run: |
           curl -fsSL -o k3s "https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION/+/%2B}/k3s"
@@ -33,9 +36,9 @@ jobs:
         run: |
           base=https://github.com/kubernetes-sigs/kwok/releases/download/$KWOK_VERSION
           curl -fsSL -o kwok "$base/kwok-linux-amd64" && chmod +x kwok
-          curl -fsSL -o stage-fast.yaml "$base/stage-fast.yaml"
+          ./test/e2e-aws/kwok-stages.sh "$KWOK_VERSION" > stages.yaml
           ./kwok --kubeconfig=/etc/rancher/k3s/k3s.yaml --manage-all-nodes=false \
-            --manage-nodes-with-annotation-selector=kwok.x-k8s.io/node=fake --config=stage-fast.yaml >kwok.log 2>&1 &
+            --manage-nodes-with-annotation-selector=kwok.x-k8s.io/node=fake --config=stages.yaml >kwok.log 2>&1 &
       - name: Run AWS end-to-end test
         run: ./test/e2e-aws/run.sh
       - name: Logs on failure

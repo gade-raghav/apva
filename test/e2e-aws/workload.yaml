@@ -9,12 +9,14 @@ apiVersion: apps/v1
 kind: Deployment
 metadata: {name: web, namespace: shop}
 spec:
-  replicas: 2
+  replicas: 4
   selector: {matchLabels: {app: web}}
   template:
     metadata: {labels: {app: web}}
     spec:
       nodeSelector: {eks.amazonaws.com/nodegroup: gpu}
+      topologySpreadConstraints: # start with 2 pods per node
+        - {maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: {matchLabels: {app: web}}}
       containers:
         - name: app
           image: fake-image # KWOK nodes never pull images

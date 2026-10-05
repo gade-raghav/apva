@@ -63,11 +63,12 @@ type Config struct {
 	MinConfidence string        // high | medium | low
 	Cooldown      time.Duration // minimum time between two resizes of one workload
 	MaxDownStep   float64       // max fraction a request may shrink in one step, e.g. 0.5
+	ResizeMode    string        // auto | in-place | rollout (see inplace.go)
 }
 
 // DefaultConfig returns safe defaults.
 func DefaultConfig() Config {
-	return Config{MinConfidence: "high", Cooldown: 30 * time.Minute, MaxDownStep: 0.5}
+	return Config{MinConfidence: "high", Cooldown: 30 * time.Minute, MaxDownStep: 0.5, ResizeMode: ModeAuto}
 }
 
 // Change is a per-pod request change for one resource.
@@ -85,6 +86,7 @@ type Event struct {
 	Reason   string                `json:"reason"`
 	CPU      *Change               `json:"cpu,omitempty"`
 	Memory   *Change               `json:"memory,omitempty"`
+	Method   string                `json:"method,omitempty"` // in-place | rollout
 }
 
 // API is the subset of the Kubernetes client the actuator uses.
@@ -102,9 +104,27 @@ type Actuator struct {
 	Log      *slog.Logger
 	Now      func() time.Time // for tests
 
-	mu      sync.Mutex
-	history []Event // newest first
-	last    map[collector.WorkloadKey]Event
+	mu           sync.Mutex
+	history      []Event // newest first
+	last         map[collector.WorkloadKey]Event
+	inPlaceKnown bool // ResizeMode auto: has support been determined?
+	inPlaceOK    bool
+	tracked      map[collector.WorkloadKey]bool // resized in place by this process
+}
+
+func (a *Actuator) track(k collector.WorkloadKey) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.tracked == nil {
+		a.tracked = map[collector.WorkloadKey]bool{}
+	}
+	a.tracked[k] = true
+}
+
+func (a *Actuator) isTracked(k collector.WorkloadKey) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.tracked[k]
 }
 
 const maxHistory = 100
@@ -162,6 +182,10 @@ type workload struct {
 		Annotations map[string]string `json:"annotations"`
 	} `json:"metadata"`
 	Spec struct {
+		Selector struct {
+			MatchLabels      map[string]string `json:"matchLabels"`
+			MatchExpressions []any             `json:"matchExpressions"`
+		} `json:"selector"`
 		Template struct {
 			Spec struct {
 				Containers []container `json:"containers"`
@@ -182,10 +206,13 @@ func (a *Actuator) decide(ctx context.Context, r recommender.Recommendation, hpa
 	ev := Event{Time: a.now().UTC(), Workload: r.Workload, Outcome: OutcomeSkipped}
 	cpuWanted := r.CPU.Action == recommender.ActionUpsize || r.CPU.Action == recommender.ActionDownsize
 	memWanted := r.Memory.Action == recommender.ActionUpsize || r.Memory.Action == recommender.ActionDownsize
-	if !cpuWanted && !memWanted {
+	wanted := cpuWanted || memWanted
+	// A workload resized in place is checked every round so new pods get its size too.
+	if !wanted && !a.isTracked(r.Workload) {
 		return ev, false // nothing to do: right-sized, held, or no data
 	}
-	if confidenceRank[r.Confidence] < confidenceRank[a.Cfg.MinConfidence] {
+	lowConfidence := confidenceRank[r.Confidence] < confidenceRank[a.Cfg.MinConfidence]
+	if wanted && lowConfidence && !a.isTracked(r.Workload) {
 		ev.Reason = fmt.Sprintf("confidence %s is below the required %s", r.Confidence, a.Cfg.MinConfidence)
 		return ev, true
 	}
@@ -209,6 +236,20 @@ func (a *Actuator) decide(ctx context.Context, r recommender.Recommendation, hpa
 	}
 	if v := w.Metadata.Annotations[AnnoOptOut]; v == "off" || v == "false" {
 		ev.Reason = "opted out with " + AnnoOptOut + "=" + v
+		return ev, wanted
+	}
+	st := inPlace(&w)
+	if st != nil && a.Cfg.ResizeMode != ModeRollout {
+		a.track(r.Workload)
+		if ev2, done := a.converge(ctx, ev, &w, st); done {
+			return ev2, true
+		}
+	}
+	if !wanted {
+		return ev, false
+	}
+	if lowConfidence {
+		ev.Reason = fmt.Sprintf("confidence %s is below the required %s", r.Confidence, a.Cfg.MinConfidence)
 		return ev, true
 	}
 	targeted, err := a.hpaTargets(ctx, ns, hpas)
@@ -228,7 +269,8 @@ func (a *Actuator) decide(ctx context.Context, r recommender.Recommendation, hpa
 		}
 	}
 
-	containers := w.Spec.Template.Spec.Containers
+	// What the pods run with: the template, or the size APVA set in place.
+	containers := effective(&w, st)
 	newReq := make([]map[string]string, len(containers))
 	for i := range newReq {
 		newReq[i] = map[string]string{}
@@ -312,8 +354,27 @@ func (a *Actuator) decide(ctx context.Context, r recommender.Recommendation, hpa
 		return ev, true
 	}
 
-	// Every resize is a rolling update: even a downsize needs room for the surge pod, or
-	// the rollout stalls with a Pending pod. Ask the capacity planner first.
+	ev.Reason = describe(ev, capped)
+
+	// In place first: no restarts, no surge pod, no extra node for a downsize.
+	fallback := ""
+	if a.inPlaceOn(ctx) {
+		out, handled, why := a.applyInPlace(ctx, r, &w, containers, newReq, ev)
+		if handled {
+			if out.Outcome == OutcomeApplied {
+				a.track(r.Workload)
+			}
+			return out, true
+		}
+		if a.Cfg.ResizeMode == ModeInPlace {
+			ev.Reason = "can't resize in place: " + why
+			return ev, true
+		}
+		fallback = " (rolling update: " + why + ")"
+	}
+
+	// A rolling update: even a downsize needs room for the surge pod, or the rollout
+	// stalls with a Pending pod. Ask the capacity planner first.
 	if a.Capacity != nil {
 		cpu, mem := r.CPU.Current, r.Memory.Current
 		if ev.CPU != nil {
@@ -332,7 +393,8 @@ func (a *Actuator) decide(ctx context.Context, r recommender.Recommendation, hpa
 		}
 	}
 
-	ev.Reason = describe(ev, capped)
+	ev.Method = ModeRollout
+	ev.Reason += fallback
 	if a.Cfg.DryRun {
 		ev.Outcome = OutcomeDryRun
 		return ev, true
@@ -352,10 +414,11 @@ func (a *Actuator) decide(ctx context.Context, r recommender.Recommendation, hpa
 	}
 	prevJSON, _ := json.Marshal(prev)
 	patch := map[string]any{
-		"metadata": map[string]any{"annotations": map[string]string{
+		"metadata": map[string]any{"annotations": map[string]any{
 			AnnoLastResized:  a.now().UTC().Format(time.RFC3339),
 			AnnoPrevRequests: string(prevJSON),
 			AnnoChange:       ev.Reason,
+			AnnoInPlace:      nil, // the template is authoritative again
 		}},
 		"spec": map[string]any{"template": map[string]any{"spec": map[string]any{"containers": patchContainers}}},
 	}

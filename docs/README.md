@@ -6,6 +6,7 @@
 | [architecture.md](architecture.md) | understand how a decision is made, end to end, and how the code is organised |
 | [configuration.md](configuration.md) | look up every flag, environment variable, Helm value and annotation |
 | [auto-resize.md](auto-resize.md) | let APVA resize pods: guardrails, annotations, permissions, rollback |
+| [security.md](security.md) | review exactly what APVA may do: RBAC per mode, the admission policies, AWS IAM, the pod's hardening |
 | [aws.md](aws.md) | let APVA manage nodes: capacity planning, Karpenter / Cluster Autoscaler, the Amazon EKS provider, IAM |
 | [api.md](api.md) | integrate with the JSON API or scrape `/metrics` |
 | [testing.md](testing.md) | run the unit, kind, simulated-EKS and demo tests |

@@ -1,42 +1,102 @@
 {{- if .Values.autoResize.enabled }}
-# Permissions for automatic resizing: read and patch Deployments/StatefulSets, read HPAs,
-# and read nodes/pods to check that resized pods will fit. With aws.enabled, also cordon
-# nodes and evict pods (the Eviction API respects PodDisruptionBudgets) to consolidate.
+{{- $name := include "apva.fullname" . }}
+{{- $namespaces := list }}
+{{- range splitList "," .Values.analysis.namespaces }}{{ if trim . }}{{ $namespaces = append $namespaces (trim .) }}{{ end }}{{ end }}
+{{- $inPlace := ne .Values.autoResize.resizeMode "rollout" }}
+# Least privilege, split by what each permission is for (see docs/security.md).
+#
+# 1. Read-only, cluster-wide: the capacity check needs every pod's requests and every
+#    node's allocatable to know whether a resized pod will fit.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "apva.fullname" . }}-resizer
+  name: {{ $name }}-capacity-reader
   labels: {{- include "apva.labels" . | nindent 4 }}
 rules:
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets"]
-    verbs: ["get", "list", "patch"]
-  - apiGroups: ["autoscaling"]
-    resources: ["horizontalpodautoscalers"]
-    verbs: ["get", "list"]
   - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["get", "list"]
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list"{{ if .Values.aws.enabled }}, "patch"{{ end }}]
-  {{- if .Values.aws.enabled }}
-  - apiGroups: [""]
-    resources: ["pods/eviction"]
-    verbs: ["create"]
-  {{- end }}
+    resources: ["pods", "nodes"]
+    verbs: ["list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "apva.fullname" . }}-resizer
+  name: {{ $name }}-capacity-reader
   labels: {{- include "apva.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "apva.fullname" . }}-resizer
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}-capacity-reader}
 subjects:
-  - kind: ServiceAccount
-    name: {{ include "apva.fullname" . }}
-    namespace: {{ .Release.Namespace }}
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}
+---
+# 2. Writes to workloads: only get + patch (no list, create, update or delete), only
+#    Deployments and StatefulSets, and only in analysis.namespaces when that is set.
+#    The ValidatingAdmissionPolicy in admission-policy.yaml further limits a patch to
+#    resource requests and apva.io/* annotations.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-resizer
+  labels: {{- include "apva.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["list"]
+  {{- if $inPlace }}
+  # In-place pod resize (Kubernetes 1.33+): the resize subresource can only change resources.
+  - apiGroups: [""]
+    resources: ["pods/resize"]
+    verbs: ["patch"]
+  {{- end }}
+{{- if $namespaces }}
+{{- range $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-resizer
+  namespace: {{ . }}
+  labels: {{- include "apva.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}-resizer}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}
+{{- else }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-resizer
+  labels: {{- include "apva.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}-resizer}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}
+{{- end }}
+{{- if .Values.aws.enabled }}
+---
+# 3. Node consolidation (aws.enabled): cordon nodes and evict pods. Evictions go through
+#    the Eviction API, so PodDisruptionBudgets are respected. The admission policy limits
+#    node patches to cordoning and the apva.io/draining annotation.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-node-manager
+  labels: {{- include "apva.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-node-manager
+  labels: {{- include "apva.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}-node-manager}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}
+{{- end }}
 {{- end }}

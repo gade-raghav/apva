@@ -14,12 +14,17 @@ three ways:
 
 1. **Look:** a built-in dashboard and JSON API with recommendations and a service graph
    coloured by waste. Read-only, and the default.
-2. **Let APVA resize pods:** opt-in auto-resize patches Deployment and StatefulSet requests.
-   Guardrails include confidence, cooldowns, stepped downsizing, never going above limits
-   and skipping HPA-managed workloads.
+2. **Let APVA resize pods:** opt-in auto-resize changes Deployment and StatefulSet requests,
+   **in place without restarting pods** on Kubernetes 1.33+ (GA in 1.35), with a rolling
+   update as the fallback. Guardrails include confidence, cooldowns, stepped downsizing,
+   never going above limits and skipping HPA-managed workloads.
 3. **Let APVA resize nodes too:** on Amazon EKS it grows a managed node group *before*
    pods get bigger, and drains and removes nodes *after* pods get smaller. It also works
    alongside Karpenter or the Cluster Autoscaler.
+
+All of it runs with **least-privilege RBAC**. **Admission policies** make sure APVA's
+identity can only ever change resource requests, even if its credentials leak (see
+[Security](#security)).
 
 ```
                           ┌─────────────────────────── APVA ───────────────────────────┐
@@ -43,6 +48,7 @@ three ways:
 - [Configuration](#configuration)
 - [Dashboard and API](#dashboard-and-api)
 - [Testing](#testing)
+- [Security](#security)
 - [Project layout](#project-layout)
 - [How APVA compares](#how-apva-compares)
 - [Roadmap](#roadmap)
@@ -69,20 +75,23 @@ three ways:
 
 ## Status
 
-**v0.3 (pre-alpha), experimental.** Every feature that changes your cluster is opt-in.
+**v0.4 (pre-alpha), experimental.** Every feature that changes your cluster is opt-in.
 
 | Version | What it added |
 |---|---|
 | v0.1 | Recommendations (CPU, memory, GPU), service graph, dashboard, API, Helm chart |
 | v0.2 | Opt-in **auto-resize** of Deployments/StatefulSets with guardrails; kind demo |
 | v0.3 | **Node-aware resizing**: capacity check before every resize; Karpenter / Cluster Autoscaler aware; **Amazon EKS provider** (scale up first, drain and remove after); simulated-EKS end-to-end test in CI |
+| v0.4 | **In-place pod resize** (no restarts) with rolling-update fallback; **least-privilege RBAC** (namespaced writes, no list/create/delete) and **ValidatingAdmissionPolicies** limiting APVA to resource requests |
 
 See [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md).
 
 Tested so far:
 - unit tests for every package;
 - an end-to-end test on a kind cluster with Prometheus;
-- a simulated EKS end-to-end test (real Kubernetes scheduling, simulated nodes and AWS).
+- a simulated EKS end-to-end test on Kubernetes 1.35: real scheduling, in-place resizes and
+  admission policies, with simulated nodes and AWS. APVA runs there as its own
+  least-privilege service account.
 
 **Not yet** run against a real EKS account, and GPU analysis has only been tested with
 sample data. Feedback from real clusters is very welcome:
@@ -106,8 +115,23 @@ Details: [docs/architecture.md](docs/architecture.md#the-recommender).
 
 ### 2. Auto-resize (opt-in: `--auto-resize`)
 
-APVA patches the CPU and memory **requests** of Deployments and StatefulSets, which triggers
-a normal rolling update. A workload is only touched when **all** of these guardrails pass:
+APVA changes the CPU and memory **requests** of Deployments and StatefulSets, in one of two
+ways:
+
+- **In place** (`autoResize.resizeMode: auto`, the default, on Kubernetes 1.33+). The
+  running pods are resized through the `pods/resize` subresource: same pods, no restart,
+  no surge pod, and no extra node needed to shrink. The pod template stays as it is, and
+  APVA records the size in an annotation, giving any new pod the same size.
+- **Rolling update** when in place isn't possible. That happens when:
+  - a node has no room for its pods to grow;
+  - the pods are Guaranteed QoS;
+  - the cluster is older than 1.33.
+
+  APVA patches the pod template, adding nodes first if needed.
+
+`resizeMode: in-place` never rolls; `rollout` never resizes in place.
+
+A workload is only touched when **all** of these guardrails pass:
 
 - the recommendation's confidence is at least `--auto-resize-min-confidence` (default `high`);
 - **no HPA targets it**, because the HPA's target utilisation is already headroom;
@@ -230,8 +254,14 @@ Every `--refresh` interval (default 5m) APVA:
 2. **Recommends** per workload: p95 + headroom, the tolerance band, floors, the
    traffic-aware hold, GPU idle/share, and a confidence level.
 3. **Acts** (if auto-resize is on), for each workload with an upsize or downsize:
-   guardrails → step limit and limit cap → **capacity planner** (fits / wait for nodes /
-   blocked) → patch the requests and record the previous ones.
+   1. guardrails;
+   2. step limit and limit cap;
+   3. **in place** if every pod can grow on its node;
+   4. otherwise the **capacity planner** (fits / wait for nodes / blocked) and a rolling
+      update;
+   5. record the previous requests.
+
+   New pods of a workload resized in place are brought to its size.
 4. **Consolidates** (if a node provider is on): finishes or starts at most one drain per
    node group, then removes the drained instance.
 5. **Publishes** the result to the dashboard, the API and `/metrics`, including every
@@ -252,6 +282,8 @@ All flags, environment variables and Helm values are listed in
 | `--namespaces` | `analysis.namespaces` | all non-system |
 | `--auto-resize` | `autoResize.enabled` | off |
 | `--auto-resize-dry-run` | `autoResize.dryRun` | off |
+| `--resize-mode` | `autoResize.resizeMode` | `auto` (in place when possible) |
+| | `security.admissionPolicy.enabled` | on (Kubernetes 1.30+) |
 | `--node-autoscaler-present` | `autoResize.nodeAutoscalerPresent` | off |
 | `--aws-cluster` `--aws-nodegroups` | `aws.enabled` `aws.cluster` `aws.nodegroups` | off |
 
@@ -286,10 +318,30 @@ Shapes and examples: [docs/api.md](docs/api.md).
 |---|---|---|
 | Unit tests (`make test`) | every PR | every package, including SigV4 against the AWS test vector, every guardrail, capacity and consolidation path |
 | **E2E** (`make e2e`) | every PR | kind + Prometheus + real workloads: APVA recommends downsizing an idle workload and upsizing a busy one |
-| **E2E (AWS, simulated)** (`make e2e-aws`) | every PR | real Kubernetes control plane (k3s) + **KWOK** nodes + fake EKS/Auto Scaling/Prometheus. APVA scales the node group 2 → 3 *before* resizing, removes the empty node, then shrinks pods and drains down to the minimum, with the app available throughout. **No AWS account needed.** |
+| **E2E (AWS, simulated)** (`make e2e-aws`) | every PR | real Kubernetes **1.35** control plane (k3s) + **KWOK** nodes + fake EKS/Auto Scaling/Prometheus, with APVA as its own **least-privilege service account** behind the admission policies. Resizes **in place** (same pods, no restart). Falls back to a rolling update with the node group grown 2 → 4 *first*. Shrinks in place, then drains and removes nodes down to 1. Checks the policies deny image/env/replica/RBAC changes. **No AWS account needed.** |
 | Demo (`./test/demo/up.sh`) | by hand | the dashboard with live auto-resize on a laptop |
 
 Details and how to run each locally: [docs/testing.md](docs/testing.md).
+
+## Security
+
+- **Read-only by default:** recommend-only mode mounts no service account token at all.
+- **Least-privilege RBAC** with auto-resize:
+  - `get`/`patch` on Deployments and StatefulSets only, namespaced to
+    `analysis.namespaces`;
+  - `patch` on `pods/resize`;
+  - cluster-wide **list** of pods and nodes for the capacity check.
+- **What APVA can't do:** read Secrets or ConfigMaps, create or delete anything, or touch
+  RBAC.
+- **ValidatingAdmissionPolicies** (Kubernetes 1.30+, on by default) limit APVA's identity to
+  changing **container resource requests** and `apva.io/*` annotations on workloads, and to
+  **cordoning** nodes. Images, env, commands, volumes, security contexts, service accounts,
+  scheduling and replicas are all denied, even if its credentials were stolen.
+- **AWS:** Pod Identity / IRSA with no static keys, tag-scoped IAM, and an allowlist of node
+  groups.
+- **Pod:** non-root, read-only filesystem, no capabilities, no third-party Go dependencies.
+
+Full permission matrix and threat notes: **[docs/security.md](docs/security.md)**.
 
 ## Project layout
 

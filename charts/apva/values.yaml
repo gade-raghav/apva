@@ -26,6 +26,9 @@ autoResize:
   minConfidence: high    # high needs >= 24h of data; use medium for short windows / demos
   cooldown: 30m
   maxDownStep: 0.5       # shrink at most 50% per step
+  # auto: resize running pods in place (Kubernetes 1.33+, GA in 1.35; no restart) when
+  # possible, otherwise a rolling update. in-place: never roll. rollout: never in place.
+  resizeMode: auto
   # A Cluster Autoscaler adds nodes for Pending pods, so upsizes that don't fit yet may go
   # ahead. Karpenter nodes are detected automatically.
   nodeAutoscalerPresent: false
@@ -44,6 +47,13 @@ aws:
   scaleUpTimeout: 15m
   drainTimeout: 10m
   cooldown: 10m          # between two changes to one node group
+
+security:
+  # ValidatingAdmissionPolicies (Kubernetes 1.30+) that limit APVA's patches to resource
+  # requests and apva.io/* annotations (workloads) and cordoning (nodes), even if its
+  # credentials were stolen. See docs/security.md. Disable only on clusters < 1.30.
+  admissionPolicy:
+    enabled: true
 
 # IRSA: eks.amazonaws.com/role-arn: arn:aws:iam::<account>:role/<role>
 # (with EKS Pod Identity, create the association instead; no annotation needed)
