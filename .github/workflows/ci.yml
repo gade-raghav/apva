@@ -28,7 +28,7 @@ jobs:
       - name: Render with every feature on (RBAC, admission policies, EKS)
         run: |
           helm template apva charts/apva --kube-version 1.35.0 \
-            --set autoResize.enabled=true --set analysis.namespaces="shop,payments" \
+            --set autoResize.enabled=true --set analysis.namespaces="shop\\,payments" \
             --set aws.enabled=true --set aws.cluster=c --set aws.region=us-east-1 --set aws.nodegroups=g >/dev/null
   image:
     runs-on: ubuntu-latest
