@@ -373,3 +373,37 @@ func (m *Manager) scalingUp(group string) bool {
 	defer m.mu.Unlock()
 	return m.pending[group] != nil
 }
+
+// FitsInPlace reports whether every running pod of w can grow to cpu cores and mem bytes
+// on the node it already runs on (an in-place resize can't move a pod). Shrinking always
+// fits.
+func (m *Manager) FitsInPlace(ctx context.Context, w collector.WorkloadKey, cpu, mem float64) (bool, string) {
+	cl, err := Load(ctx, m.K, m.groupLabel())
+	if err != nil {
+		return true, "" // can't see nodes: let the kubelet decide (it reports Infeasible)
+	}
+	need := map[string]Resources{}
+	for _, p := range cl.Pods {
+		if p.Workload != w || p.DaemonSet || p.Node == "" {
+			continue
+		}
+		d := need[p.Node]
+		if d == nil {
+			d = Resources{}
+			need[p.Node] = d
+		}
+		d[CPU] += math.Max(0, cpu-p.Requests[CPU])
+		d[Memory] += math.Max(0, mem-p.Requests[Memory])
+	}
+	names := make([]string, 0, len(need))
+	for n := range need {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if n := cl.Nodes[name]; n != nil && !fits(n.Free(), need[name]) {
+			return false, fmt.Sprintf("node %s has no room to grow its pod(s) in place (needs +%s)", name, fmtRes(need[name]))
+		}
+	}
+	return true, ""
+}

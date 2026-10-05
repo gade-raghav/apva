@@ -61,6 +61,7 @@ func run() error {
 		arDryRun       = flag.Bool("auto-resize-dry-run", false, "with --auto-resize: decide and log, but never patch")
 		arMinConf      = flag.String("auto-resize-min-confidence", actDef.MinConfidence, "with --auto-resize: lowest confidence to act on (high|medium|low)")
 		arCooldown     = flag.Duration("auto-resize-cooldown", actDef.Cooldown, "with --auto-resize: minimum time between resizes of one workload")
+		resizeMode     = flag.String("resize-mode", actDef.ResizeMode, "with --auto-resize: auto (in place on Kubernetes 1.33+ when possible, else rolling update), in-place (never roll), rollout (never in place)")
 		arMaxDown      = flag.Float64("auto-resize-max-down", actDef.MaxDownStep, "with --auto-resize: max fraction a request may shrink in one step")
 		awsCluster     = flag.String("aws-cluster", envOr("APVA_AWS_CLUSTER", ""), "EKS cluster name: with --auto-resize, manage the EKS managed node groups in --aws-nodegroups")
 		awsRegion      = flag.String("aws-region", envOr("AWS_REGION", os.Getenv("AWS_DEFAULT_REGION")), "AWS region of the EKS cluster")
@@ -111,6 +112,11 @@ func run() error {
 		default:
 			return fmt.Errorf("--auto-resize-min-confidence must be high, medium or low, got %q", *arMinConf)
 		}
+		switch *resizeMode {
+		case actuator.ModeAuto, actuator.ModeInPlace, actuator.ModeRollout:
+		default:
+			return fmt.Errorf("--resize-mode must be auto, in-place or rollout, got %q", *resizeMode)
+		}
 		if *arMaxDown <= 0 || *arMaxDown > 1 {
 			return fmt.Errorf("--auto-resize-max-down must be in (0, 1], got %g", *arMaxDown)
 		}
@@ -123,7 +129,7 @@ func run() error {
 				return fmt.Errorf("--auto-resize: %w", err)
 			}
 		}
-		eng.ActCfg = actuator.Config{DryRun: *arDryRun, MinConfidence: *arMinConf, Cooldown: *arCooldown, MaxDownStep: *arMaxDown}
+		eng.ActCfg = actuator.Config{DryRun: *arDryRun, MinConfidence: *arMinConf, Cooldown: *arCooldown, MaxDownStep: *arMaxDown, ResizeMode: *resizeMode}
 		act := &actuator.Actuator{K: k, Cfg: eng.ActCfg, Log: log}
 		mgr := &capacity.Manager{K: k, Log: log, Cfg: capDef}
 		mgr.Cfg.DryRun, mgr.Cfg.ExternalAutoscaler = *arDryRun, *extAutoscaler
@@ -160,7 +166,7 @@ func run() error {
 		eng.Nodes, eng.NodesCfg = mgr, mgr.Cfg
 		act.Capacity = mgr
 		eng.Act = act
-		log.Info("auto-resize enabled", "dryRun", *arDryRun, "minConfidence", *arMinConf, "cooldown", arCooldown.String(), "maxDown", *arMaxDown)
+		log.Info("auto-resize enabled", "dryRun", *arDryRun, "minConfidence", *arMinConf, "cooldown", arCooldown.String(), "maxDown", *arMaxDown, "resizeMode", *resizeMode)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

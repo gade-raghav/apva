@@ -30,6 +30,7 @@ flags. A few flags can also be set through environment variables.
 | `--auto-resize-min-confidence` | | `high` | lowest confidence to act on: `high`, `medium`, `low` |
 | `--auto-resize-cooldown` | | `30m` | minimum time between two resizes of one workload |
 | `--auto-resize-max-down` | | `0.5` | the most a request may shrink in one step, as a fraction (0, 1] |
+| `--resize-mode` | | `auto` | `auto`: in place (no restart) on Kubernetes 1.33+ when possible, otherwise a rolling update. `in-place`: never roll; skip what can't be done in place. `rollout`: always a rolling update |
 | `--node-autoscaler-present` | | `false` | a Cluster Autoscaler adds nodes for Pending pods, so resizes that don't fit yet may go ahead. Karpenter nodes are detected without this flag |
 | `--kube-api` | `APVA_KUBE_API` | in-cluster | Kubernetes API URL when running outside the cluster, e.g. `http://127.0.0.1:8001` from `kubectl proxy` |
 
@@ -66,6 +67,8 @@ for LocalStack or the simulated end-to-end test.
 | `autoResize.enabled` | `false` | `--auto-resize`; also mounts the service account token and creates the RBAC |
 | `autoResize.dryRun` · `minConfidence` · `cooldown` · `maxDownStep` | `false` · `high` · `30m` · `0.5` | `--auto-resize-*` |
 | `autoResize.nodeAutoscalerPresent` | `false` | `--node-autoscaler-present` |
+| `autoResize.resizeMode` | `auto` | `--resize-mode`; `rollout` also drops the `pods/resize` permission |
+| `security.admissionPolicy.enabled` | `true` | installs the ValidatingAdmissionPolicies that limit what APVA may change (Kubernetes 1.30+; the chart refuses older clusters unless this is `false`). See [security.md](security.md) |
 | `aws.enabled` | `false` | turns on the EKS provider (only together with `autoResize.enabled`) and adds node/eviction RBAC |
 | `aws.cluster` · `region` · `nodegroups` | required when enabled | `--aws-cluster` · `--aws-region` · `--aws-nodegroups` |
 | `aws.consolidate` · `consolidateBelow` · `scaleUpTimeout` · `drainTimeout` · `cooldown` | `true` · `0.5` · `15m` · `10m` · `10m` | `--aws-*` |
@@ -90,7 +93,8 @@ APVA writes these, and uses them to resume after a restart:
 |---|---|---|
 | `apva.io/last-resized` | workload | time of APVA's last resize (drives the cooldown) |
 | `apva.io/previous-requests` | workload | JSON of the requests before that resize, per container (for rollback) |
-| `apva.io/last-resize-summary` | workload | e.g. `CPU 300m → 150m, memory 192Mi → 96Mi per pod` |
+| `apva.io/last-resize-summary` | workload | e.g. `CPU 300m → 150m, memory 192Mi → 96Mi per pod, in place (no pod restart)` |
+| `apva.io/in-place-requests` | workload | after an in-place resize: the template's requests at the time and the size the pods should run with. New pods are brought to that size. Ignored once the template's requests change (the template wins); removed by a rolling update |
 | `apva.io/draining` | node | start time of an in-flight drain |
 
 Node labels APVA understands: `eks.amazonaws.com/nodegroup` (the EKS provider's groups) and

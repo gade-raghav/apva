@@ -3,6 +3,37 @@
 All notable changes to APVA. Versions follow [semantic versioning](https://semver.org);
 before v1.0, minor versions may change behaviour.
 
+## v0.4.0 — In-place resize and least privilege (unreleased)
+
+### Added
+- **In-place pod resize** (`--resize-mode`, Helm `autoResize.resizeMode`; default `auto`).
+  On Kubernetes 1.33+ (GA in 1.35) APVA resizes running pods through `pods/resize`: no
+  restart, no surge pod, and shrinking needs no spare node. It falls back to a rolling
+  update when a node has no room, the pods are Guaranteed QoS, or the cluster doesn't
+  support it, with the reason in the activity log. The size is recorded in
+  `apva.io/in-place-requests`, and new pods (scale-out, evictions, drains, even while
+  Pending) are brought to it. A changed template wins.
+- **ValidatingAdmissionPolicies** (`security.admissionPolicy.enabled`, on by default,
+  Kubernetes 1.30+). APVA's identity may only change container resource requests and
+  `apva.io/*` annotations on workloads, and only cordon nodes. Images, env, commands,
+  volumes, security contexts, service accounts, scheduling, replicas, labels, creates,
+  deletes and system namespaces are all denied.
+- [docs/security.md](docs/security.md): permission matrix, admission policies, AWS, the
+  pod's hardening, the dashboard's exposure.
+- The simulated-EKS end-to-end test now runs on Kubernetes 1.35, with APVA as its own
+  least-privilege service account. It covers in-place resize, rollout fallback with nodes
+  first, consolidation with in-place shrink, and checks that the policies deny everything
+  else.
+
+### Changed
+- **RBAC split by purpose and minimised:**
+  - `capacity-reader`: list pods and nodes;
+  - `resizer`: get/patch deployments and statefulsets (no `list`), list HPAs,
+    patch `pods/resize`. It is bound **per namespace** when `analysis.namespaces` is set;
+  - `node-manager` (EKS): patch nodes, create evictions.
+- The capacity check runs before every **rolling update**. In-place resizes use a per-node
+  fit check instead.
+
 ## v0.3.0 — Release 1 (AWS): node-aware resizing
 
 ### Added

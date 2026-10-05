@@ -1,0 +1,135 @@
+{{- if and .Values.autoResize.enabled .Values.security.admissionPolicy.enabled }}
+{{- if not (semverCompare ">=1.30-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "security.admissionPolicy needs Kubernetes 1.30+ (ValidatingAdmissionPolicy). Upgrade, or set security.admissionPolicy.enabled=false and rely on RBAC alone." }}
+{{- end }}
+{{- $name := include "apva.fullname" . }}
+{{- $user := printf "system:serviceaccount:%s:%s" .Release.Namespace $name }}
+# Defence in depth (Kubernetes 1.30+): even if APVA's credentials leaked, they could not be
+# used to change images, commands, env, volumes, security settings, replicas or labels.
+# RBAC says WHICH objects APVA may patch; these policies say WHAT it may change in them:
+# only container resource requests and apva.io/* annotations on workloads, and only
+# cordoning plus the apva.io/draining annotation on nodes.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-workload-guard
+  labels: {{- include "apva.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["deployments", "statefulsets"]
+  matchConditions:
+    - name: is-apva
+      expression: request.userInfo.username == {{ $user | quote }}
+  variables:
+    - name: oldAnn
+      expression: "oldObject.metadata.?annotations.orValue({})"
+    - name: newAnn
+      expression: "object.metadata.?annotations.orValue({})"
+    - name: oldPod
+      expression: "oldObject.spec.template.spec"
+    - name: newPod
+      expression: "object.spec.template.spec"
+  validations:
+    - expression: "request.operation == 'UPDATE'"
+      message: "APVA may only patch existing workloads"
+    - expression: "!(request.namespace in ['kube-system', 'kube-public', 'kube-node-lease'])"
+      message: "APVA may not change workloads in system namespaces"
+    - expression: >-
+        object.metadata.?labels.orValue({}) == oldObject.metadata.?labels.orValue({}) &&
+        variables.oldAnn.all(k, k.startsWith('apva.io/') || (k in variables.newAnn && variables.newAnn[k] == variables.oldAnn[k])) &&
+        variables.newAnn.all(k, k.startsWith('apva.io/') || k in variables.oldAnn)
+      message: "APVA may only change apva.io/* annotations on a workload"
+    - expression: >-
+        object.spec.?replicas == oldObject.spec.?replicas &&
+        object.spec.selector == oldObject.spec.selector &&
+        object.spec.template.metadata.?labels == oldObject.spec.template.metadata.?labels &&
+        object.spec.template.metadata.?annotations == oldObject.spec.template.metadata.?annotations
+      message: "APVA may not change replicas, selectors or pod template metadata"
+    - expression: >-
+        variables.newPod.?serviceAccountName == variables.oldPod.?serviceAccountName &&
+        variables.newPod.?automountServiceAccountToken == variables.oldPod.?automountServiceAccountToken &&
+        variables.newPod.?securityContext == variables.oldPod.?securityContext &&
+        variables.newPod.?hostNetwork == variables.oldPod.?hostNetwork &&
+        variables.newPod.?hostPID == variables.oldPod.?hostPID &&
+        variables.newPod.?hostIPC == variables.oldPod.?hostIPC &&
+        variables.newPod.?volumes == variables.oldPod.?volumes &&
+        variables.newPod.?nodeSelector == variables.oldPod.?nodeSelector &&
+        variables.newPod.?affinity == variables.oldPod.?affinity &&
+        variables.newPod.?tolerations == variables.oldPod.?tolerations &&
+        variables.newPod.?runtimeClassName == variables.oldPod.?runtimeClassName &&
+        variables.newPod.?priorityClassName == variables.oldPod.?priorityClassName &&
+        variables.newPod.?imagePullSecrets == variables.oldPod.?imagePullSecrets &&
+        variables.newPod.?initContainers == variables.oldPod.?initContainers &&
+        variables.newPod.?ephemeralContainers == variables.oldPod.?ephemeralContainers
+      message: "APVA may not change the pod's identity, security, volumes, scheduling or init containers"
+    - expression: >-
+        variables.newPod.containers.size() == variables.oldPod.containers.size() &&
+        variables.newPod.containers.all(c, variables.oldPod.containers.exists(o,
+          o.name == c.name && o.?image == c.?image && o.?command == c.?command && o.?args == c.?args &&
+          o.?env == c.?env && o.?envFrom == c.?envFrom && o.?volumeMounts == c.?volumeMounts &&
+          o.?securityContext == c.?securityContext && o.?ports == c.?ports && o.?lifecycle == c.?lifecycle &&
+          o.?resizePolicy == c.?resizePolicy && o.?resources.?limits == c.?resources.?limits &&
+          o.?resources.?claims == c.?resources.?claims))
+      message: "APVA may only change container resource requests"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-workload-guard
+  labels: {{- include "apva.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}-workload-guard
+  validationActions: [Deny]
+{{- if .Values.aws.enabled }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}-node-guard
+  labels: {{- include "apva.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["nodes"]
+  matchConditions:
+    - name: is-apva
+      expression: request.userInfo.username == {{ $user | quote }}
+  variables:
+    - name: oldAnn
+      expression: "oldObject.metadata.?annotations.orValue({})"
+    - name: newAnn
+      expression: "object.metadata.?annotations.orValue({})"
+  validations:
+    - expression: "request.operation == 'UPDATE'"
+      message: "APVA may only patch existing nodes"
+    - expression: >-
+        object.metadata.?labels.orValue({}) == oldObject.metadata.?labels.orValue({}) &&
+        variables.oldAnn.all(k, k == 'apva.io/draining' || (k in variables.newAnn && variables.newAnn[k] == variables.oldAnn[k])) &&
+        variables.newAnn.all(k, k == 'apva.io/draining' || k in variables.oldAnn)
+      message: "APVA may only change the apva.io/draining annotation on a node"
+    - expression: >-
+        object.spec.?taints == oldObject.spec.?taints &&
+        object.spec.?providerID == oldObject.spec.?providerID &&
+        object.spec.?podCIDR == oldObject.spec.?podCIDR &&
+        object.spec.?podCIDRs == oldObject.spec.?podCIDRs
+      message: "APVA may only cordon or uncordon a node"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}-node-guard
+  labels: {{- include "apva.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}-node-guard
+  validationActions: [Deny]
+{{- end }}
+{{- end }}

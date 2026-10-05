@@ -17,6 +17,11 @@
 - [x] Pluggable node provider (EKS first); Karpenter / Cluster Autoscaler aware
 - [x] Simulated EKS end-to-end test in CI (k3s + KWOK + fake AWS), no AWS account needed
 - [ ] Real-EKS end-to-end run (needs an AWS account)
+
+## v0.4 — In place and least privilege
+- [x] In-place pod resize (no restarts) with rolling-update fallback
+- [x] Least-privilege RBAC, namespaced writes
+- [x] ValidatingAdmissionPolicies limiting APVA to resource requests
 - [ ] Instance-type changes (launch template versions), e.g. A10G → H100
 - [ ] Self-managed node groups
 
@@ -33,7 +38,6 @@
 
 ## v1.0 — Act (opt-in)
 - [ ] Automatic rollback when a resize leads to OOMKills or CPU throttling
-- [ ] In-place pod resize (no restarts) where the cluster supports it
 
 ## Community milestones
 - Private beta with invited CNCF community members

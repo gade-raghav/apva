@@ -20,6 +20,7 @@ import (
 type fakeAPI struct {
 	objects map[string]string
 	patches map[string]map[string]any
+	fail    map[string]error // path -> error returned by a patch
 }
 
 func (f *fakeAPI) Get(_ context.Context, path string, out any) error {
@@ -31,6 +32,9 @@ func (f *fakeAPI) Get(_ context.Context, path string, out any) error {
 }
 
 func (f *fakeAPI) StrategicMergePatch(_ context.Context, path string, patch any) error {
+	if err := f.fail[path]; err != nil {
+		return err
+	}
 	if f.patches == nil {
 		f.patches = map[string]map[string]any{}
 	}

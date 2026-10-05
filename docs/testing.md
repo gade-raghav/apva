@@ -49,37 +49,47 @@ check that every commit is signed off (DCO).
 
 `test/e2e-aws/run.sh` with `.github/workflows/e2e-aws.yml`:
 
-- **Kubernetes:** a real control plane, k3s started with `--disable-agent`, so the API
-  server, scheduler and controllers are real but there are no kubelets.
-- **Nodes and pods:** [KWOK](https://kwok.sigs.k8s.io) simulates them. Pods are scheduled,
-  rolled out and evicted by the real Kubernetes code.
+- **Kubernetes:** a real **1.35** control plane, k3s started with `--disable-agent`, so the
+  API server, scheduler, controllers, RBAC and admission are real but there are no kubelets.
+- **Nodes and pods:** [KWOK](https://kwok.sigs.k8s.io) simulates them.
+  `test/e2e-aws/kwok-stages.sh` makes KWOK containers report
+  `status.containerStatuses[].resources` like a 1.35 kubelet, so the API server accepts
+  in-place resizes.
 - **AWS and Prometheus:** `test/e2e-aws/fake.py` plays EKS (`DescribeNodegroup`,
   `UpdateNodegroupConfig`), Auto Scaling (`TerminateInstanceInAutoScalingGroup`) and
-  Prometheus. A node group change creates or deletes KWOK nodes labelled
-  `eks.amazonaws.com/nodegroup=gpu`. Unsigned AWS requests are rejected.
-- **APVA** runs as a process with `--auto-resize --aws-cluster=e2e --aws-nodegroups=gpu`.
+  Prometheus. A node group change creates or deletes KWOK nodes. Unsigned AWS requests are
+  rejected.
+- **APVA** runs **as its own service account**: a `kubectl proxy --as` impersonates it,
+  with the chart's RBAC and ValidatingAdmissionPolicies installed from `helm template`.
+  Every call APVA makes has to pass the production permissions.
 
 The test asserts this sequence:
 
 | Phase | Expected |
 |---|---|
-| 1 | `web` (2 × 1 core) uses ~3.4 cores/pod. Nothing fits the rollout's surge pod → `UpdateNodegroupConfig desired=3` → 3 Ready nodes → `web` resized to 3910m → rolled out → the node left empty is terminated → back to 2 nodes, app available |
-| 2 | Usage drops to 0.3 cores, `minSize` lowered to 1 → `web` shrinks (1955m, a 50% step) → under-used nodes drained through the Eviction API and terminated → 1 node, app available. Each created node except one was terminated exactly once |
+| 1. in place | `web` (4 × 1 core, 2 per 4-core node) needs 1.84 cores/pod and its nodes have room → pods resized **in place**: same pod names, template still `1`, no node group call |
+| 2. rollout + nodes | It needs 2.99 cores/pod; growing in place won't fit → **rolling update**. The node group is scaled 2 → 4 first, the template becomes 2990m, rolled out, and the in-place annotation is cleared |
+| 3. shrink + consolidate | Usage drops to 0.3 and `minSize` drops to 1 → pods shrink **in place** (1495m, then further), and the template stays 2990m. Under-used nodes are drained through the Eviction API and terminated. Pods recreated from the larger template are brought to the in-place size so they fit → **1 node** with all 4 pods running. Each created node except one was terminated exactly once |
+| 4. security | `kubectl auth can-i` as APVA: no Secrets, ConfigMaps, pod creation, deletes, other namespaces or RBAC. Patches by APVA's identity that change the image, env, replicas or service account, or label a node, are **denied by the admission policies** |
 
 Run it locally against any cluster with KWOK:
 
 ```bash
+./test/e2e-aws/kwok-stages.sh > stages.yaml
 kwok --kubeconfig=$KUBECONFIG --manage-all-nodes=false \
-  --manage-nodes-with-annotation-selector=kwok.x-k8s.io/node=fake --config=stage-fast.yaml &
-make e2e-aws
+  --manage-nodes-with-annotation-selector=kwok.x-k8s.io/node=fake --config=stages.yaml &
+make e2e-aws    # needs helm (or APVA_RBAC_MANIFEST=<rendered rbac + policies>)
 ```
 
 or copy the two setup steps from the workflow (k3s + KWOK, both single binaries from
 GitHub releases).
 
-This test found a real bug before release: shrinking pods is also a rolling update, and
-on full nodes the surge pod stayed Pending forever. That's why the capacity check now runs
-before **every** resize.
+This test has caught real bugs before release:
+- **Shrinking is also a rolling update.** On full nodes the surge pod stayed Pending
+  forever, so the capacity check now runs before every rolling update.
+- **New pods start at the template size.** After an in-place shrink, a pod recreated by a
+  node drain came back at the template's larger size and didn't fit. APVA now brings new
+  pods to the in-place size, including while they are Pending.
 
 ## Testing on real AWS
 

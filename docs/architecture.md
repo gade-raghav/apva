@@ -89,13 +89,25 @@ these steps in order. The first one that fails stops it, and the outcome is reco
    - containers get proportional shares;
    - a request is never raised above the container's limit;
    - rounding to whole millicores or MiB.
-7. **Capacity planner** (`Ensure`), for every resize:
+7. **In place first** (`--resize-mode auto`/`in-place`, Kubernetes 1.33+, see
+   [auto-resize.md](auto-resize.md#in-place-or-rolling-update)):
+   - list the workload's pods by selector;
+   - give up if any pod is Guaranteed QoS;
+   - `FitsInPlace`: every node must have room for its pods' growth;
+   - patch `pods/<name>/resize` for each pod;
+   - record the size in `apva.io/in-place-requests`. Only annotations change; the template
+     is untouched.
+
+   If any of these fails, it falls back to steps 8–9 with the reason. Each round also
+   brings pods that don't match the recorded size (created from the template later) to
+   it. A workload's "current" requests are its template with that annotation applied.
+8. **Capacity planner** (`Ensure`), for a rolling update:
    - `Fits` → continue;
    - `Waiting` → outcome `waiting`, nodes are being added;
    - `Blocked` → outcome `skipped` with the reason.
-8. Dry-run → outcome `dry-run`. Otherwise a strategic-merge patch of the requests, plus the
-   annotations `apva.io/last-resized`, `apva.io/previous-requests` and
-   `apva.io/last-resize-summary`.
+9. Dry-run → outcome `dry-run`. Otherwise a strategic-merge patch of the template's
+   requests, plus the annotations `apva.io/last-resized`, `apva.io/previous-requests` and
+   `apva.io/last-resize-summary`. `apva.io/in-place-requests` is removed.
 
 The history keeps the last 100 decisions, newest first, and records a repeated identical
 decision only once.
@@ -172,6 +184,9 @@ clouds implement the same five methods.
 
 | Mode | Kubernetes RBAC | AWS IAM |
 |---|---|---|
-| Recommend-only | none (Prometheus only) | none |
-| `autoResize.enabled` | get/list/patch deployments, statefulsets; get/list HPAs, pods, nodes | none |
+| Recommend-only | none (no token mounted) | none |
+| `autoResize.enabled` | list pods, nodes (cluster); get/patch deployments, statefulsets, list HPAs, patch pods/resize (namespaced to `analysis.namespaces` when set) | none |
 | `+ aws.enabled` | + patch nodes, create pods/eviction | `eks:DescribeNodegroup`, `eks:UpdateNodegroupConfig`, `autoscaling:TerminateInstanceInAutoScalingGroup` |
+
+On top of RBAC, ValidatingAdmissionPolicies limit what those patches may change. Details:
+[security.md](security.md).

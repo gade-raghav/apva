@@ -412,3 +412,17 @@ func TestNoConsolidationRightAfterScaleUpOrWithPendingPods(t *testing.T) {
 		t.Fatalf("must not consolidate while a pod is Pending: %v", f2.evicted)
 	}
 }
+
+func TestFitsInPlace(t *testing.T) {
+	ctx := context.Background()
+	m := newManager(twoNodes(), nil, &clock{time.Now()}) // each node: 4 cores, one 3-core inference pod
+	if ok, why := m.FitsInPlace(ctx, inference, 3.9, 4<<30); !ok {
+		t.Fatalf("+0.9 core fits on a 4-core node with 1 free: %s", why)
+	}
+	if ok, why := m.FitsInPlace(ctx, inference, 4.5, 4<<30); ok || !strings.Contains(why, "no room to grow") {
+		t.Fatalf("+1.5 core must not fit in place: %v %q", ok, why)
+	}
+	if ok, _ := m.FitsInPlace(ctx, inference, 1, 1<<30); !ok {
+		t.Fatal("shrinking always fits")
+	}
+}

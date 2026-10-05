@@ -41,6 +41,9 @@ spec:
             - --auto-resize-min-confidence={{ .Values.autoResize.minConfidence }}
             - --auto-resize-cooldown={{ .Values.autoResize.cooldown }}
             - --auto-resize-max-down={{ .Values.autoResize.maxDownStep }}
+            {{- if ne .Values.autoResize.resizeMode "auto" }}
+            - --resize-mode={{ .Values.autoResize.resizeMode }}
+            {{- end }}
             {{- if .Values.autoResize.dryRun }}
             - --auto-resize-dry-run
             {{- end }}

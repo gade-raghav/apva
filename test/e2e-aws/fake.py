@@ -17,7 +17,7 @@ PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 9300
 GROUP, NS = "gpu", "shop"
 ng = {"nodegroupName": GROUP, "status": "ACTIVE", "instanceTypes": ["g5.xlarge"],
       "scalingConfig": {"minSize": 2, "maxSize": 4, "desiredSize": 2}}
-usage = {"web": {"cpu": 3.4, "mem": 220 * 2**20}}
+usage = {"web": {"cpu": 1.6, "mem": 220 * 2**20}}
 calls, lock, seq = [], threading.Lock(), [0]
 
 def kube(method, path, body=None):
@@ -38,10 +38,12 @@ def reconcile():
         kube("POST", "/api/v1/nodes", {
             "apiVersion": "v1", "kind": "Node",
             "metadata": {"name": name, "annotations": {"kwok.x-k8s.io/node": "fake"},
-                         "labels": {"eks.amazonaws.com/nodegroup": GROUP, "type": "kwok"}},
+                         "labels": {"eks.amazonaws.com/nodegroup": GROUP, "type": "kwok", "kubernetes.io/hostname": name}},
             "spec": {"providerID": f"aws:///us-east-1a/i-{name}"},
             "status": {"allocatable": {"cpu": "4", "memory": "16Gi", "pods": "110"},
-                       "capacity": {"cpu": "4", "memory": "16Gi", "pods": "110"}}})
+                       "capacity": {"cpu": "4", "memory": "16Gi", "pods": "110"},
+                       # a kubelet version that supports in-place resize
+                       "nodeInfo": {"kubeletVersion": "v1.35.0"}}})
         calls.append(f"node created {name}")
 
 def qty(v):
