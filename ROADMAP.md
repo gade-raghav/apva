@@ -1,6 +1,6 @@
 # Roadmap
 
-## v0.1 — Recommend (current)
+## v0.1 — Recommend
 - [x] CPU / memory right-sizing from Prometheus (p95 + headroom)
 - [x] GPU utilisation analysis (NVIDIA DCGM exporter)
 - [x] Service graph from Hubble flow metrics

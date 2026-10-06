@@ -75,7 +75,7 @@ identity can only ever change resource requests, even if its credentials leak (s
 
 ## Status
 
-**v0.4 (pre-alpha), experimental.** Every feature that changes your cluster is opt-in.
+**v0.5 (pre-alpha), experimental.** Every feature that changes your cluster is opt-in.
 
 | Version | What it added |
 |---|---|
@@ -83,7 +83,7 @@ identity can only ever change resource requests, even if its credentials leak (s
 | v0.2 | Opt-in **auto-resize** of Deployments/StatefulSets with guardrails; kind demo |
 | v0.3 | **Node-aware resizing**: capacity check before every resize; Karpenter / Cluster Autoscaler aware; **Amazon EKS provider** (scale up first, drain and remove after); simulated-EKS end-to-end test in CI |
 | v0.4 | **In-place pod resize** (no restarts) with rolling-update fallback; **least-privilege RBAC** (namespaced writes, no list/create/delete) and **ValidatingAdmissionPolicies** limiting APVA to resource requests |
-| v0.5 (in progress) | **VPA custom recommender**: APVA's numbers, traffic-aware hold included, written into VPA status for the VPA to apply ([kubernetes/autoscaler#10395](https://github.com/kubernetes/autoscaler/issues/10395)) |
+| v0.5 | **VPA custom recommender**: APVA's numbers, traffic-aware hold included, written into VPA status for the VPA to apply ([kubernetes/autoscaler#10395](https://github.com/kubernetes/autoscaler/issues/10395)) |
 
 See [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md).
 
