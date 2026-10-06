@@ -45,6 +45,7 @@ A workload is resized only when **all** of these hold:
 |---|---|---|
 | Recommendation confidence ≥ `--auto-resize-min-confidence` | `high` (needs ≥ 24h of data) | don't act on thin data |
 | Not targeted by a HorizontalPodAutoscaler | always | the HPA target utilisation already provides headroom; changing requests changes its maths |
+| Not targeted by a VerticalPodAutoscaler | always | the VPA owns its requests; two resizers would fight. To get APVA's numbers there, make APVA the VPA's recommender ([vpa.md](vpa.md)) |
 | Not annotated `apva.io/auto-resize: "off"` | always | per-workload opt-out |
 | Running pods match the spec | always | never stack a change on an unfinished rollout |
 | Not resized within `--auto-resize-cooldown` | `30m` | let new pods produce data first |

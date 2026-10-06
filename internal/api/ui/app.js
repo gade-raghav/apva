@@ -14,7 +14,7 @@ let selected = null;
 const cores = (c) => (c >= 1 ? c.toFixed(2) : Math.round(c * 1000) + "m");
 const mib = (b) => (b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + "Gi" : Math.round(b / (1 << 20)) + "Mi");
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const OUTCOME_VAR = { applied: "--ok", "dry-run": "--hold", waiting: "--hold", delegated: "--hold", skipped: "--muted", failed: "--under" };
+const OUTCOME_VAR = { applied: "--ok", written: "--ok", "dry-run": "--hold", waiting: "--hold", delegated: "--hold", skipped: "--muted", failed: "--under" };
 const ago = (t) => {
   const s = Math.max(0, (Date.now() - new Date(t).getTime()) / 1000);
   return s < 60 ? Math.round(s) + "s ago" : s < 3600 ? Math.round(s / 60) + "m ago" : Math.round(s / 3600) + "h ago";
@@ -51,11 +51,13 @@ function render() {
   const ar = data.autoResize || { enabled: false, events: [] };
   if (ar.enabled) tiles.push([s.autoResized || 0, ar.dryRun ? "would auto-resize" : "auto-resized"]);
   $("mode").hidden = false;
-  $("mode").textContent = ar.enabled ? (ar.dryRun ? "auto-resize: dry-run" : "auto-resize: on") : "recommend-only";
+  const vp = data.vpa || { enabled: false, events: [] };
+  if (vp.enabled) tiles.push([vp.managed || 0, `VPAs using "${vp.name}"`]);
+  $("mode").textContent = (ar.enabled ? (ar.dryRun ? "auto-resize: dry-run" : "auto-resize: on") : "recommend-only") + (vp.enabled ? " · VPA recommender" : "");
   $("mode").style.color = `var(${ar.enabled ? (ar.dryRun ? "--hold" : "--ok") : "--muted"})`;
   $("mode").title = ar.enabled ? `acts on ${ar.minConfidence}+ confidence, cooldown ${ar.cooldown}` : "start with --auto-resize to apply recommendations automatically";
   $("arcol").hidden = !ar.enabled;
-  $("activity-panel").hidden = !ar.enabled;
+  $("activity-panel").hidden = !ar.enabled && !vp.enabled;
   const latestEv = {};
   for (const ev of ar.events || []) {
     const id = ev.workload.namespace + "/" + ev.workload.name;
@@ -65,15 +67,18 @@ function render() {
   const feed = [
     ...(ar.events || []).map((ev) => ({ ...ev, who: ev.workload.namespace + "/" + ev.workload.name })),
     ...(ng.events || []).map((ev) => ({ ...ev, who: "node group " + ev.group })),
+    ...(vp.events || []).map((ev) => ({ ...ev, who: "vpa " + ev.vpa })),
   ].sort((a, b) => new Date(b.time) - new Date(a.time));
   $("activity-title").textContent = ng.enabled
     ? `Auto-resize activity · ${ng.provider === "aws" ? "EKS" : ng.provider} ${ng.cluster}: ${(ng.groups || []).join(", ")}`
-    : "Auto-resize activity";
+    : ar.enabled ? "Auto-resize activity" : "VPA recommender activity";
   $("activity").innerHTML = feed.length
     ? feed.slice(0, 30).map((ev) => `<li><time datetime="${esc(ev.time)}">${ago(ev.time)}</time>
         ${outcome(ev.outcome)} <strong>${esc(ev.who)}</strong>
         <span class="muted">${esc(ev.reason)}</span></li>`).join("")
-    : `<li class="muted">No resizes yet. APVA acts once a recommendation reaches ${esc(ar.minConfidence || "high")} confidence.</li>`;
+    : ar.enabled
+      ? `<li class="muted">No resizes yet. APVA acts once a recommendation reaches ${esc(ar.minConfidence || "high")} confidence.</li>`
+      : `<li class="muted">No VerticalPodAutoscaler selects recommender "${esc(vp.name)}" yet.</li>`;
   $("tiles").innerHTML = tiles.map(([v, l]) => `<div class="tile"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`).join("");
   $("warnings").innerHTML = (data.warnings || []).map((w) => `<li>${esc(w)}</li>`).join("");
 

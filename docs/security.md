@@ -13,6 +13,7 @@ shape the design:
 |---|---|---|
 | **Recommend-only** (default) | **none**; no service account token is mounted | none |
 | `autoResize.enabled` | see the tables below | none |
+| `vpaRecommender.enabled` | list VPAs, patch **only** their `status`, get deployments/statefulsets | none |
 | `+ aws.enabled` | + cordon nodes, evict pods | `eks:DescribeNodegroup`, `eks:UpdateNodegroupConfig`, `autoscaling:TerminateInstanceInAutoScalingGroup` (scoped by tag) |
 
 ### RBAC with `autoResize.enabled`
@@ -22,9 +23,21 @@ shape the design:
 | `apva-capacity-reader` | `list` pods and nodes | the capacity check needs every pod's requests and every node's allocatable to know whether a resized pod fits | cluster |
 | `apva-resizer` | `get, patch` deployments and statefulsets | change requests and record decisions in `apva.io/*` annotations | **namespaced** to `analysis.namespaces` when set (one RoleBinding per namespace), otherwise cluster |
 | | `list` horizontalpodautoscalers | skip HPA-managed workloads | same |
+| | `list` verticalpodautoscalers | skip workloads a VPA manages | same |
 | | `patch pods/resize` | in-place resize. The subresource can only change resources. Omitted with `resizeMode: rollout` | same |
 | `apva-node-manager` (`aws.enabled`) | `patch` nodes | cordon or uncordon a node being drained | cluster |
 | | `create pods/eviction` | drain through the Eviction API, so PodDisruptionBudgets are respected | cluster |
+
+### RBAC with `vpaRecommender.enabled`
+
+| Role | Rules | Why | Scope |
+|---|---|---|---|
+| `apva-vpa-recommender` | `list` verticalpodautoscalers | find the VPAs that name APVA in `spec.recommenders` | **namespaced** to `analysis.namespaces` when set, otherwise cluster |
+| | `patch verticalpodautoscalers/status` | write the recommendation. The status subresource can't change a VPA's spec: its update mode, policies, target or recommenders | same |
+| | `get` deployments and statefulsets | read the pod template to split the recommendation per container | same |
+
+In this mode APVA doesn't resize anything itself: the VPA's updater and admission controller
+do, under the VPA's own permissions. See [vpa.md](vpa.md).
 
 **APVA cannot:**
 - read Secrets or ConfigMaps;

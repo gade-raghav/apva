@@ -25,9 +25,15 @@
 - [ ] Instance-type changes (launch template versions), e.g. A10G → H100
 - [ ] Self-managed node groups
 
+## v0.5 — VPA recommender
+- [x] APVA as a VPA custom recommender (writes VPA status; the VPA applies it)
+- [x] Auto-resize leaves VPA-managed workloads to the VPA
+- [ ] Feedback from SIG Autoscaling ([kubernetes/autoscaler#10395](https://github.com/kubernetes/autoscaler/issues/10395))
+
 ## v0.2 — Integrate
 - [ ] `Recommendation` custom resource written by an in-cluster controller
-- [ ] Export recommendations as VPA objects (recommend-only mode) and KEDA hints
+- [x] Feed recommendations to VPA (done in v0.5 as a custom recommender)
+- [ ] KEDA hints
 - [ ] Multi-cluster support
 - [ ] Cost estimates (OpenCost integration)
 

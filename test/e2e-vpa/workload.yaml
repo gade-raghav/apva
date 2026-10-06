@@ -1,0 +1,75 @@
+# Copyright 2026 Raghav Gade
+# SPDX-License-Identifier: Apache-2.0
+# Three workloads on the fake node group (KWOK nodes):
+#   web     VPA that names recommender "apva"   → APVA writes its status, never patches web
+#   api     VPA using the default recommender   → APVA leaves both the VPA and api alone
+#   worker  no VPA                              → APVA's own auto-resize handles it
+apiVersion: v1
+kind: Namespace
+metadata: {name: shop}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: web, namespace: shop}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: web}}
+  template:
+    metadata: {labels: {app: web}}
+    spec:
+      nodeSelector: {eks.amazonaws.com/nodegroup: gpu}
+      containers:
+        - name: app
+          image: fake-image # KWOK nodes never pull images
+          resources: {requests: {cpu: 300m, memory: 256Mi}}
+        - name: proxy
+          image: fake-image
+          resources: {requests: {cpu: 100m, memory: 64Mi}}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata: {name: web-vpa, namespace: shop}
+spec:
+  targetRef: {apiVersion: apps/v1, kind: Deployment, name: web}
+  recommenders: [{name: apva}]
+  updatePolicy: {updateMode: "Off"} # no VPA updater in this test; we check the status
+  resourcePolicy:
+    containerPolicies:
+      - {containerName: proxy, minAllowed: {cpu: 50m}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api, namespace: shop}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: api}}
+  template:
+    metadata: {labels: {app: api}}
+    spec:
+      nodeSelector: {eks.amazonaws.com/nodegroup: gpu}
+      containers:
+        - name: app
+          image: fake-image
+          resources: {requests: {cpu: "1", memory: 256Mi}}
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata: {name: api-vpa, namespace: shop}
+spec:
+  targetRef: {apiVersion: apps/v1, kind: Deployment, name: api}
+  updatePolicy: {updateMode: "Off"}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: worker, namespace: shop}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: worker}}
+  template:
+    metadata: {labels: {app: worker}}
+    spec:
+      nodeSelector: {eks.amazonaws.com/nodegroup: gpu}
+      containers:
+        - name: app
+          image: fake-image
+          resources: {requests: {cpu: "1", memory: 256Mi}}

@@ -215,3 +215,39 @@ func TestCapacityGatesEveryResize(t *testing.T) {
 		})
 	}
 }
+
+func TestLeavesVPATargetsToTheVPA(t *testing.T) {
+	down := rec(1, 0.05, recommender.ActionDownsize, 512<<20, 512<<20, recommender.ActionOK)
+	f := &fakeAPI{objects: map[string]string{depPath: deployment("", `{"cpu":"1","memory":"512Mi"}`, "")}}
+	a := newActuator(f)
+	a.VPATargets = func(context.Context, string) (map[collector.WorkloadKey]string, error) {
+		return map[collector.WorkloadKey]string{{Namespace: "shop", Name: "web"}: "shop/web-vpa (updateMode Recreate)"}, nil
+	}
+	a.Apply(context.Background(), []recommender.Recommendation{down})
+	if h := a.History(); len(h) != 1 || h[0].Outcome != OutcomeSkipped || !strings.Contains(h[0].Reason, "shop/web-vpa") {
+		t.Fatalf("history = %+v", h)
+	}
+	if len(f.patches) != 0 {
+		t.Fatalf("a VPA-targeted workload must not be patched: %v", f.patches)
+	}
+
+	// Can't tell whether a VPA targets it: leave it alone this round.
+	a = newActuator(f)
+	a.VPATargets = func(context.Context, string) (map[collector.WorkloadKey]string, error) {
+		return nil, context.DeadlineExceeded
+	}
+	a.Apply(context.Background(), []recommender.Recommendation{down})
+	if h := a.History(); len(h) != 1 || h[0].Outcome != OutcomeFailed || len(f.patches) != 0 {
+		t.Fatalf("history = %+v patches %v", h, f.patches)
+	}
+
+	// No VPA for it: business as usual.
+	a = newActuator(f)
+	a.VPATargets = func(context.Context, string) (map[collector.WorkloadKey]string, error) {
+		return map[collector.WorkloadKey]string{}, nil
+	}
+	a.Apply(context.Background(), []recommender.Recommendation{down})
+	if h := a.History(); len(h) != 1 || h[0].Outcome != OutcomeApplied {
+		t.Fatalf("history = %+v", h)
+	}
+}

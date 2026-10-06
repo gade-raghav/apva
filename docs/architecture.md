@@ -23,6 +23,7 @@ Prometheus ─▶  collector   ├──▶  recommender  ├──▶   actuato
 | `internal/recommender` | Pure sizing logic: a snapshot goes in, recommendations come out |
 | `internal/engine` | The loop. Holds the latest result, rolls up the summary, builds the graph, calls the actuator and the node manager |
 | `internal/actuator` | Auto-resize: guardrails, plans per container, patches the workload, keeps a de-duplicated history |
+| `internal/vpa` | The VPA custom recommender: turns recommendations into `status.recommendation` for VPAs that name APVA, and tells the actuator which workloads VPAs own |
 | `internal/capacity` | The capacity planner (`Ensure`), consolidation (`Consolidate`) and the `Provider` interface |
 | `internal/aws` | SigV4 signing, credentials (env / EKS Pod Identity / IRSA), the EKS + Auto Scaling client, and the EKS `NodeProvider` |
 | `internal/kube` | A minimal Kubernetes REST client (in-cluster or `kubectl proxy`) and quantity parsing |
@@ -180,12 +181,20 @@ clouds implement the same five methods.
   workloads and nodes, so a restarted APVA continues where it left off. A pending scale-up
   is re-derived; the nodes it asked for still arrive.
 
+## VPA recommender mode
+
+With `--vpa-recommender`, after **recommend** the engine hands the recommendations to
+`internal/vpa`. It writes them into the status of every VPA whose `spec.recommenders` names
+APVA, and the VPA's own updater and admission controller apply them. The actuator asks
+`internal/vpa` which workloads any VPA targets and skips them. See [vpa.md](vpa.md).
+
 ## 5. Permissions
 
 | Mode | Kubernetes RBAC | AWS IAM |
 |---|---|---|
 | Recommend-only | none (no token mounted) | none |
 | `autoResize.enabled` | list pods, nodes (cluster); get/patch deployments, statefulsets, list HPAs, patch pods/resize (namespaced to `analysis.namespaces` when set) | none |
+| `vpaRecommender.enabled` | list verticalpodautoscalers, patch verticalpodautoscalers/status, get deployments, statefulsets (namespaced when set); auto-resize also gets list verticalpodautoscalers | none |
 | `+ aws.enabled` | + patch nodes, create pods/eviction | `eks:DescribeNodegroup`, `eks:UpdateNodegroupConfig`, `autoscaling:TerminateInstanceInAutoScalingGroup` |
 
 On top of RBAC, ValidatingAdmissionPolicies limit what those patches may change. Details:

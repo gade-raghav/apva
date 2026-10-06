@@ -91,6 +91,28 @@ This test has caught real bugs before release:
   node drain came back at the template's larger size and didn't fit. APVA now brings new
   pods to the in-place size, including while they are Pending.
 
+## End-to-end, VPA recommender
+
+`test/e2e-vpa/run.sh` with `.github/workflows/e2e-vpa.yml` uses the same k3s 1.35 + KWOK +
+fake Prometheus setup, plus the real VPA CRD (`vertical-pod-autoscaler-1.8.0`; set
+`VPA_VERSION` or `VPA_CRD` to change it). The VPA's updater and admission controller are not
+installed, so the test checks what APVA writes, not how the VPA applies it. APVA runs with
+`--vpa-recommender --auto-resize` as its own ServiceAccount, with the chart's RBAC. There
+are three workloads:
+
+| Workload | Set-up | Expected |
+|---|---|---|
+| `web` | two containers (300m + 100m), VPA naming `apva`, `minAllowed: 50m` on the proxy | `status.recommendation` for both containers, split 3:1, the proxy's target and lower bound held at 50m, `uncappedTarget` below it, conditions set; `web` itself never patched |
+| `api` | VPA using the default recommender | VPA status untouched, `api` never patched (activity log: "the VPA owns its requests") |
+| `worker` | no VPA | resized in place by APVA as usual |
+
+It also checks that APVA's identity can `patch verticalpodautoscalers/status` in `shop` and
+nothing more: no VPA spec changes, creates or deletes, and no other namespaces.
+
+```sh
+make e2e-vpa   # needs the same cluster + KWOK as make e2e-aws
+```
+
 ## Testing on real AWS
 
 There is no real-EKS run yet. The plan:

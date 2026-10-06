@@ -48,6 +48,13 @@ aws:
   drainTimeout: 10m
   cooldown: 10m          # between two changes to one node group
 
+# Run as a VerticalPodAutoscaler custom recommender: APVA writes recommendations into the
+# status of VPAs that set spec.recommenders: [{name: apva}], and the VPA updater and admission
+# controller apply them. Needs the VPA CRDs and components installed. See docs/vpa.md.
+vpaRecommender:
+  enabled: false
+  name: apva
+
 security:
   # ValidatingAdmissionPolicies (Kubernetes 1.30+) that limit APVA's patches to resource
   # requests and apva.io/* annotations (workloads) and cordoning (nodes), even if its

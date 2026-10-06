@@ -83,6 +83,7 @@ identity can only ever change resource requests, even if its credentials leak (s
 | v0.2 | Opt-in **auto-resize** of Deployments/StatefulSets with guardrails; kind demo |
 | v0.3 | **Node-aware resizing**: capacity check before every resize; Karpenter / Cluster Autoscaler aware; **Amazon EKS provider** (scale up first, drain and remove after); simulated-EKS end-to-end test in CI |
 | v0.4 | **In-place pod resize** (no restarts) with rolling-update fallback; **least-privilege RBAC** (namespaced writes, no list/create/delete) and **ValidatingAdmissionPolicies** limiting APVA to resource requests |
+| v0.5 (in progress) | **VPA custom recommender**: APVA's numbers, traffic-aware hold included, written into VPA status for the VPA to apply ([kubernetes/autoscaler#10395](https://github.com/kubernetes/autoscaler/issues/10395)) |
 
 See [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md).
 
@@ -135,6 +136,7 @@ A workload is only touched when **all** of these guardrails pass:
 
 - the recommendation's confidence is at least `--auto-resize-min-confidence` (default `high`);
 - **no HPA targets it**, because the HPA's target utilisation is already headroom;
+- **no VPA targets it**, because the VPA owns its requests (APVA can feed the VPA instead);
 - it isn't annotated `apva.io/auto-resize: "off"`;
 - its running pods match its spec, so APVA never stacks a change on an unfinished rollout;
 - it wasn't resized within the cooldown (default 30m);
@@ -183,6 +185,24 @@ The AWS client uses only the standard library (SigV4, EKS Pod Identity, IRSA), s
 still has **zero third-party Go dependencies**. Node management sits behind a small
 provider interface, so other clouds can follow.
 Details: [docs/aws.md](docs/aws.md).
+
+### 4. VPA recommender (opt-in: `--vpa-recommender`)
+
+Already run the [Vertical Pod Autoscaler](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler)?
+APVA can be its recommender. A VPA opts in with `spec.recommenders: [{name: apva}]`. APVA
+writes the recommendation into that VPA's status, and the VPA's updater and admission
+controller apply it under the VPA's update mode and policies.
+
+- APVA's pod-level size is split across containers in proportion to their requests.
+- The **traffic-aware hold** carries over: while callers ramp up, the VPA keeps
+  `lowerBound` at the current request, so it won't evict a pod to shrink it.
+- Container policies (`mode: Off`, `controlledResources`, `minAllowed`/`maxAllowed`) are
+  honoured.
+- APVA only `patch`es the VPA's `status` subresource.
+
+With auto-resize on too, APVA **never resizes a workload any VPA targets**. VPA-managed
+workloads get APVA's numbers through the VPA, and APVA resizes the rest itself.
+Details: [docs/vpa.md](docs/vpa.md).
 
 ## Quick start
 
@@ -286,6 +306,7 @@ All flags, environment variables and Helm values are listed in
 | | `security.admissionPolicy.enabled` | on (Kubernetes 1.30+) |
 | `--node-autoscaler-present` | `autoResize.nodeAutoscalerPresent` | off |
 | `--aws-cluster` `--aws-nodegroups` | `aws.enabled` `aws.cluster` `aws.nodegroups` | off |
+| `--vpa-recommender` | `vpaRecommender.enabled` | off |
 
 **Annotations** on your workloads:
 - `apva.io/auto-resize: "off"`: never resize this workload.
@@ -319,6 +340,7 @@ Shapes and examples: [docs/api.md](docs/api.md).
 | Unit tests (`make test`) | every PR | every package, including SigV4 against the AWS test vector, every guardrail, capacity and consolidation path |
 | **E2E** (`make e2e`) | every PR | kind + Prometheus + real workloads: APVA recommends downsizing an idle workload and upsizing a busy one |
 | **E2E (AWS, simulated)** (`make e2e-aws`) | every PR | real Kubernetes **1.35** control plane (k3s) + **KWOK** nodes + fake EKS/Auto Scaling/Prometheus, with APVA as its own **least-privilege service account** behind the admission policies. Resizes **in place** (same pods, no restart). Falls back to a rolling update with the node group grown 2 → 4 *first*. Shrinks in place, then drains and removes nodes down to 1. Checks the policies deny image/env/replica/RBAC changes. **No AWS account needed.** |
+| **E2E (VPA recommender)** (`make e2e-vpa`) | every PR | Kubernetes 1.35 + KWOK + the real **VPA CRD**, APVA as its own service account. A VPA naming `apva` gets a per-container recommendation that honours `minAllowed`. A default-recommender VPA is left untouched. VPA-targeted workloads are never resized by APVA itself. APVA's identity can't change VPA specs |
 | Demo (`./test/demo/up.sh`) | by hand | the dashboard with live auto-resize on a laptop |
 
 Details and how to run each locally: [docs/testing.md](docs/testing.md).
@@ -331,6 +353,8 @@ Details and how to run each locally: [docs/testing.md](docs/testing.md).
     `analysis.namespaces`;
   - `patch` on `pods/resize`;
   - cluster-wide **list** of pods and nodes for the capacity check.
+- **VPA recommender mode:** list VPAs, `patch` only their `status`, and `get` the target
+  workloads; namespaced to `analysis.namespaces`.
 - **What APVA can't do:** read Secrets or ConfigMaps, create or delete anything, or touch
   RBAC.
 - **ValidatingAdmissionPolicies** (Kubernetes 1.30+, on by default) limit APVA's identity to
@@ -353,6 +377,7 @@ internal/engine/     periodic loop, roll-up, service graph, result
 internal/actuator/   auto-resize: guardrails, patches, history
 internal/capacity/   capacity planner, consolidation, Provider interface
 internal/aws/        EKS / Auto Scaling client, SigV4, credentials, EKS node provider
+internal/vpa/        VPA custom recommender: writes VPA status
 internal/kube/       minimal Kubernetes REST client, quantities
 internal/prom/       Prometheus client
 internal/demo/       built-in sample cluster (--demo)
@@ -360,6 +385,7 @@ internal/api/        HTTP API and the embedded dashboard (ui/)
 charts/apva/         Helm chart
 test/e2e/            kind end-to-end test
 test/e2e-aws/        simulated EKS end-to-end test (k3s + KWOK + fake AWS)
+test/e2e-vpa/        VPA recommender end-to-end test (k3s + KWOK + VPA CRD)
 test/demo/           5-minute laptop demo
 docs/                documentation (start at docs/README.md)
 ```
@@ -373,7 +399,8 @@ APVA **complements** the autoscalers rather than replacing them.
 - **Karpenter** and the **Cluster Autoscaler** decide *which nodes* to run; APVA lets them
   add nodes, or manages EKS node groups itself where neither runs.
 - Compared with **VPA, Goldilocks or KRR**, APVA adds the service graph, GPU awareness and
-  node-aware application.
+  node-aware application. With the VPA, APVA can also be its recommender
+  ([docs/vpa.md](docs/vpa.md)).
 
 See [docs/positioning.md](docs/positioning.md).
 
@@ -385,7 +412,7 @@ Highlights, from [ROADMAP.md](ROADMAP.md):
 - in-place pod resize (no restarts);
 - automatic rollback on OOMKills;
 - a `Recommendation` CRD;
-- VPA/KEDA exports;
+- KEDA hints (VPA: done, as a custom recommender);
 - OpenCost integration;
 - forecasting.
 

@@ -15,6 +15,7 @@ import (
 	"github.com/gade-raghav/apva/internal/capacity"
 	"github.com/gade-raghav/apva/internal/collector"
 	"github.com/gade-raghav/apva/internal/recommender"
+	"github.com/gade-raghav/apva/internal/vpa"
 )
 
 // Summary is a cluster-level roll-up.
@@ -71,6 +72,22 @@ type Result struct {
 	Warnings        []string                     `json:"warnings,omitempty"`
 	AutoResize      AutoResize                   `json:"autoResize"`
 	NodeGroups      NodeGroups                   `json:"nodeGroups"`
+	VPA             VPAStatus                    `json:"vpa"`
+}
+
+// VPAStatus reports APVA's work as a VerticalPodAutoscaler custom recommender.
+type VPAStatus struct {
+	Enabled bool        `json:"enabled"`
+	Name    string      `json:"name,omitempty"` // recommender name VPAs select
+	Managed int         `json:"managed"`        // VPA objects that select APVA
+	Events  []vpa.Event `json:"events"`
+}
+
+// VPAWriter is implemented by *vpa.Writer.
+type VPAWriter interface {
+	Write(ctx context.Context, recs []recommender.Recommendation)
+	History() []vpa.Event
+	Managed() int
 }
 
 // NodeGroups reports node group management and capacity decisions.
@@ -108,6 +125,9 @@ type Engine struct {
 	// Act, if set, resizes workloads automatically after each analysis.
 	Act    Actuator
 	ActCfg actuator.Config
+	// VPA, if set, writes recommendations into VPA objects that select APVA.
+	VPA     VPAWriter
+	VPAName string
 	// Nodes, if set, reports capacity decisions and consolidates node groups after pods
 	// are resized.
 	Nodes         Nodes
@@ -137,6 +157,10 @@ func (e *Engine) RunOnce(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 	res := Analyse(snap, e.Cfg)
+	if e.VPA != nil {
+		e.VPA.Write(ctx, res.Recommendations)
+		res.VPA = VPAStatus{Enabled: true, Name: e.VPAName, Managed: e.VPA.Managed(), Events: e.VPA.History()}
+	}
 	if e.Act != nil {
 		e.Act.Apply(ctx, res.Recommendations)
 		res.AutoResize = AutoResize{
