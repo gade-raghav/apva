@@ -39,7 +39,7 @@ kubectl -n apva port-forward svc/apva 8080:8080
 open http://localhost:8080
 ```
 
-This pulls the public image `ghcr.io/gade-raghav/apva:v0.3.0` (amd64 and arm64). APVA stays
+This pulls the public image `ghcr.io/gade-raghav/apva:v0.5.0` (amd64 and arm64). APVA stays
 read-only unless you add `--set autoResize.enabled=true` (see [auto-resize](auto-resize.md);
 try `--set autoResize.dryRun=true` first).
 

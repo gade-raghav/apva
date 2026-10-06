@@ -10,7 +10,7 @@ the `/api/v1/*` endpoints answer `503 {"error": "analysis not ready yet"}`.
 | `GET /api/v1/recommendations` | `{"generatedAt", "items": [Recommendation…]}`. Filters: `?namespace=shop`, `?action=downsize` (matches the CPU, memory or GPU action) |
 | `GET /api/v1/summary` | the summary object |
 | `GET /api/v1/graph` | `{"nodes": [...], "links": [...]}` |
-| `GET /api/v1/version` | `{"version": "v0.3.0"}` |
+| `GET /api/v1/version` | `{"version": "v0.5.0"}` |
 | `GET /metrics` | Prometheus metrics (below) |
 | `GET /healthz` · `GET /readyz` | liveness · readiness (ready after the first analysis) |
 | `GET /` | the dashboard |

@@ -3,7 +3,10 @@
 All notable changes to APVA. Versions follow [semantic versioning](https://semver.org);
 before v1.0, minor versions may change behaviour.
 
-## v0.5.0 — VPA recommender (unreleased)
+## v0.5.0 — VPA recommender (2026-10-06)
+
+Helm chart 0.5.0 defaults to the v0.5.0 image. The chart version was not bumped for
+v0.4.0, so chart 0.5.0 is the first to include both releases.
 
 ### Added
 - **APVA as a Vertical Pod Autoscaler custom recommender** (`--vpa-recommender`, Helm
@@ -25,7 +28,7 @@ before v1.0, minor versions may change behaviour.
   recommender it uses, so the two never resize the same pods. The resizer role gets
   `list verticalpodautoscalers` for this.
 
-## v0.4.0 — In-place resize and least privilege (unreleased)
+## v0.4.0 — In-place resize and least privilege (2026-10-05)
 
 ### Added
 - **In-place pod resize** (`--resize-mode`, Helm `autoResize.resizeMode`; default `auto`).
