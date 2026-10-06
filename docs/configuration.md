@@ -34,6 +34,16 @@ flags. A few flags can also be set through environment variables.
 | `--node-autoscaler-present` | | `false` | a Cluster Autoscaler adds nodes for Pending pods, so resizes that don't fit yet may go ahead. Karpenter nodes are detected without this flag |
 | `--kube-api` | `APVA_KUBE_API` | in-cluster | Kubernetes API URL when running outside the cluster, e.g. `http://127.0.0.1:8001` from `kubectl proxy` |
 
+### VPA recommender
+
+| Flag | Env | Default | Meaning |
+|---|---|---|---|
+| `--vpa-recommender` | `APVA_VPA_RECOMMENDER=true` | `false` | write recommendations into the status of VerticalPodAutoscalers whose `spec.recommenders` names APVA. See [vpa.md](vpa.md) |
+| `--vpa-recommender-name` | | `apva` | the recommender name VPAs select (not `default`) |
+
+With `--auto-resize`, APVA also skips every workload a VPA targets, whether or not this
+flag is on.
+
 ### Node groups: Amazon EKS provider (needs `--auto-resize`)
 
 | Flag | Env | Default | Meaning |
@@ -68,6 +78,7 @@ for LocalStack or the simulated end-to-end test.
 | `autoResize.dryRun` · `minConfidence` · `cooldown` · `maxDownStep` | `false` · `high` · `30m` · `0.5` | `--auto-resize-*` |
 | `autoResize.nodeAutoscalerPresent` | `false` | `--node-autoscaler-present` |
 | `autoResize.resizeMode` | `auto` | `--resize-mode`; `rollout` also drops the `pods/resize` permission |
+| `vpaRecommender.enabled` · `name` | `false` · `apva` | `--vpa-recommender` · `--vpa-recommender-name`; also mounts the service account token and adds the VPA-status role. See [vpa.md](vpa.md) |
 | `security.admissionPolicy.enabled` | `true` | installs the ValidatingAdmissionPolicies that limit what APVA may change (Kubernetes 1.30+; the chart refuses older clusters unless this is `false`). See [security.md](security.md) |
 | `aws.enabled` | `false` | turns on the EKS provider (only together with `autoResize.enabled`) and adds node/eviction RBAC |
 | `aws.cluster` · `region` · `nodegroups` | required when enabled | `--aws-cluster` · `--aws-region` · `--aws-nodegroups` |

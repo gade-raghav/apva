@@ -95,6 +95,16 @@ func (c *Client) Create(ctx context.Context, path string, body any) error {
 	return c.do(ctx, http.MethodPost, path, "application/json", b, nil)
 }
 
+// MergePatch applies a JSON merge patch (RFC 7386) to path. Custom resources accept this,
+// not strategic merge patches.
+func (c *Client) MergePatch(ctx context.Context, path string, patch any) error {
+	b, err := json.Marshal(patch)
+	if err != nil {
+		return err
+	}
+	return c.do(ctx, http.MethodPatch, path, "application/merge-patch+json", b, nil)
+}
+
 // StrategicMergePatch applies a strategic merge patch to path.
 func (c *Client) StrategicMergePatch(ctx context.Context, path string, patch any) error {
 	b, err := json.Marshal(patch)

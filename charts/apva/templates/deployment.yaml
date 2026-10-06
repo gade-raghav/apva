@@ -15,7 +15,7 @@ spec:
       {{- end }}
     spec:
       serviceAccountName: {{ include "apva.fullname" . }}
-      automountServiceAccountToken: {{ .Values.autoResize.enabled }}
+      automountServiceAccountToken: {{ or .Values.autoResize.enabled .Values.vpaRecommender.enabled }}
       securityContext:
         runAsNonRoot: true
         seccompProfile: {type: RuntimeDefault}
@@ -35,6 +35,10 @@ spec:
             {{- end }}
             {{- if .Values.analysis.includeSystem }}
             - --include-system
+            {{- end }}
+            {{- if .Values.vpaRecommender.enabled }}
+            - --vpa-recommender
+            - --vpa-recommender-name={{ .Values.vpaRecommender.name }}
             {{- end }}
             {{- if .Values.autoResize.enabled }}
             - --auto-resize

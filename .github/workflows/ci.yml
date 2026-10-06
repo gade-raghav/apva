@@ -29,7 +29,10 @@ jobs:
         run: |
           helm template apva charts/apva --kube-version 1.35.0 \
             --set autoResize.enabled=true --set analysis.namespaces="shop\\,payments" \
-            --set aws.enabled=true --set aws.cluster=c --set aws.region=us-east-1 --set aws.nodegroups=g >/dev/null
+            --set aws.enabled=true --set aws.cluster=c --set aws.region=us-east-1 --set aws.nodegroups=g \
+            --set vpaRecommender.enabled=true >/dev/null
+      - name: Render VPA recommender mode alone (cluster-wide)
+        run: helm template apva charts/apva --set vpaRecommender.enabled=true >/dev/null
   image:
     runs-on: ubuntu-latest
     steps:

@@ -4,7 +4,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 IMG ?= ghcr.io/gade-raghav/apva:$(VERSION)
 PROMETHEUS_URL ?= http://localhost:9090
 
-.PHONY: all build test lint run demo demo-cluster demo-down image e2e e2e-aws clean
+.PHONY: all build test lint run demo demo-cluster demo-down image e2e e2e-aws e2e-vpa clean
 all: lint test build
 
 build:
@@ -38,6 +38,10 @@ e2e:
 # Needs a cluster in $KUBECONFIG with KWOK running; see .github/workflows/e2e-aws.yml.
 e2e-aws:
 	./test/e2e-aws/run.sh
+
+# Same setup; also installs the VPA CRD. See .github/workflows/e2e-vpa.yml.
+e2e-vpa:
+	./test/e2e-vpa/run.sh
 
 clean:
 	rm -rf bin dist

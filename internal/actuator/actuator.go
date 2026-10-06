@@ -101,8 +101,11 @@ type Actuator struct {
 	Cfg Config
 	// Capacity, if set, must agree that larger pods will fit (and may add nodes first).
 	Capacity Capacity
-	Log      *slog.Logger
-	Now      func() time.Time // for tests
+	// VPATargets, if set, lists the workloads VerticalPodAutoscalers target in a namespace
+	// (workload -> "namespace/name (updateMode X)"). APVA leaves those to the VPA.
+	VPATargets func(ctx context.Context, ns string) (map[collector.WorkloadKey]string, error)
+	Log        *slog.Logger
+	Now        func() time.Time // for tests
 
 	mu           sync.Mutex
 	history      []Event // newest first
@@ -140,7 +143,30 @@ func (a *Actuator) History() []Event {
 // Apply acts on one round of recommendations.
 func (a *Actuator) Apply(ctx context.Context, recs []recommender.Recommendation) {
 	hpas := map[string]map[string]bool{} // namespace -> "kind/name" targeted by an HPA
+	vpas := map[string]map[collector.WorkloadKey]string{}
 	for _, r := range recs {
+		if a.VPATargets != nil {
+			t, ok := vpas[r.Workload.Namespace]
+			if !ok {
+				var err error
+				if t, err = a.VPATargets(ctx, r.Workload.Namespace); err != nil {
+					t = nil // can't tell: be safe and skip this namespace this round
+				}
+				vpas[r.Workload.Namespace] = t
+			}
+			if t == nil {
+				a.record(Event{Time: a.now().UTC(), Workload: r.Workload, Outcome: OutcomeFailed, Reason: "can't list VerticalPodAutoscalers in its namespace; leaving it alone"})
+				continue
+			}
+			if v, ok := t[r.Workload]; ok {
+				if r.CPU.Action == recommender.ActionUpsize || r.CPU.Action == recommender.ActionDownsize ||
+					r.Memory.Action == recommender.ActionUpsize || r.Memory.Action == recommender.ActionDownsize {
+					a.record(Event{Time: a.now().UTC(), Workload: r.Workload, Outcome: OutcomeSkipped,
+						Reason: "targeted by VerticalPodAutoscaler " + v + "; the VPA owns its requests"})
+				}
+				continue
+			}
+		}
 		if ev, ok := a.decide(ctx, r, hpas); ok {
 			a.record(ev)
 		}

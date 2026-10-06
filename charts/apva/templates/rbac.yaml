@@ -1,7 +1,7 @@
-{{- if .Values.autoResize.enabled }}
 {{- $name := include "apva.fullname" . }}
 {{- $namespaces := list }}
 {{- range splitList "," .Values.analysis.namespaces }}{{ if trim . }}{{ $namespaces = append $namespaces (trim .) }}{{ end }}{{ end }}
+{{- if .Values.autoResize.enabled }}
 {{- $inPlace := ne .Values.autoResize.resizeMode "rollout" }}
 # Least privilege, split by what each permission is for (see docs/security.md).
 #
@@ -41,6 +41,10 @@ rules:
     verbs: ["get", "patch"]
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
+    verbs: ["list"]
+  # Workloads targeted by a VerticalPodAutoscaler are left to the VPA (no double resizing).
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers"]
     verbs: ["list"]
   {{- if $inPlace }}
   # In-place pod resize (Kubernetes 1.33+): the resize subresource can only change resources.
@@ -96,6 +100,51 @@ metadata:
   name: {{ $name }}-node-manager
   labels: {{- include "apva.labels" . | nindent 4 }}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}-node-manager}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}
+{{- end }}
+{{- end }}
+{{- if .Values.vpaRecommender.enabled }}
+---
+# 4. VPA custom recommender (vpaRecommender.enabled): read VPAs, write only their status
+#    subresource, and read the target's pod template to split the recommendation across
+#    containers. The VPA updater and admission controller do the actual resizing.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}-vpa-recommender
+  labels: {{- include "apva.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers"]
+    verbs: ["list"]
+  - apiGroups: ["autoscaling.k8s.io"]
+    resources: ["verticalpodautoscalers/status"]
+    verbs: ["patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get"]
+{{- if $namespaces }}
+{{- range $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}-vpa-recommender
+  namespace: {{ . }}
+  labels: {{- include "apva.labels" $ | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}-vpa-recommender}
+subjects:
+  - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ $.Release.Namespace }}}
+{{- end }}
+{{- else }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}-vpa-recommender
+  labels: {{- include "apva.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ $name }}-vpa-recommender}
 subjects:
   - {kind: ServiceAccount, name: {{ $name }}, namespace: {{ .Release.Namespace }}}
 {{- end }}

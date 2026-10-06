@@ -28,6 +28,7 @@ import (
 	"github.com/gade-raghav/apva/internal/kube"
 	"github.com/gade-raghav/apva/internal/prom"
 	"github.com/gade-raghav/apva/internal/recommender"
+	"github.com/gade-raghav/apva/internal/vpa"
 )
 
 // version is set at build time with -ldflags "-X main.version=..."
@@ -72,6 +73,8 @@ func run() error {
 		awsDrainTO     = flag.Duration("aws-drain-timeout", capDef.DrainTimeout, "give up draining a node (and uncordon it) after this long")
 		awsCooldown    = flag.Duration("aws-nodegroup-cooldown", capDef.Cooldown, "minimum time between two changes to one node group")
 		extAutoscaler  = flag.Bool("node-autoscaler-present", false, "a Cluster Autoscaler adds nodes for Pending pods: let upsizes that do not fit go ahead (Karpenter nodes are detected automatically)")
+		vpaRec         = flag.Bool("vpa-recommender", envOr("APVA_VPA_RECOMMENDER", "") == "true", "act as a VerticalPodAutoscaler custom recommender: write recommendations into VPA objects that select --vpa-recommender-name")
+		vpaName        = flag.String("vpa-recommender-name", vpa.DefaultName, "recommender name VPA objects use to select APVA (spec.recommenders[].name)")
 		kubeAPI        = flag.String("kube-api", envOr("APVA_KUBE_API", ""), "Kubernetes API URL for --auto-resize outside a cluster, e.g. http://127.0.0.1:8001 from `kubectl proxy` (default: in-cluster service account)")
 	)
 	flag.Parse()
@@ -103,10 +106,29 @@ func run() error {
 	if *awsCluster != "" && !*autoResize {
 		return errors.New("--aws-cluster requires --auto-resize")
 	}
-	if *autoResize {
+	var k *kube.Client
+	if *autoResize || *vpaRec {
 		if *demoMode {
-			return errors.New("--auto-resize needs a real cluster; it cannot be combined with --demo")
+			return errors.New("--auto-resize and --vpa-recommender need a real cluster; they cannot be combined with --demo")
 		}
+		if *kubeAPI != "" {
+			k = kube.New(*kubeAPI)
+		} else {
+			var err error
+			if k, err = kube.InCluster(); err != nil {
+				return fmt.Errorf("--auto-resize/--vpa-recommender: %w", err)
+			}
+		}
+	}
+	if *vpaRec {
+		if *vpaName == "" || *vpaName == "default" {
+			return errors.New("--vpa-recommender-name must be set and must not be \"default\" (that is VPA's own recommender)")
+		}
+		eng.VPA = &vpa.Writer{K: k, Name: *vpaName, Namespaces: ns, Tolerance: def.Tolerance, Log: log}
+		eng.VPAName = *vpaName
+		log.Info("VPA custom recommender enabled", "name", *vpaName)
+	}
+	if *autoResize {
 		switch *arMinConf {
 		case "high", "medium", "low":
 		default:
@@ -120,17 +142,11 @@ func run() error {
 		if *arMaxDown <= 0 || *arMaxDown > 1 {
 			return fmt.Errorf("--auto-resize-max-down must be in (0, 1], got %g", *arMaxDown)
 		}
-		var k *kube.Client
-		if *kubeAPI != "" {
-			k = kube.New(*kubeAPI)
-		} else {
-			var err error
-			if k, err = kube.InCluster(); err != nil {
-				return fmt.Errorf("--auto-resize: %w", err)
-			}
-		}
 		eng.ActCfg = actuator.Config{DryRun: *arDryRun, MinConfidence: *arMinConf, Cooldown: *arCooldown, MaxDownStep: *arMaxDown, ResizeMode: *resizeMode}
-		act := &actuator.Actuator{K: k, Cfg: eng.ActCfg, Log: log}
+		act := &actuator.Actuator{K: k, Cfg: eng.ActCfg, Log: log,
+			VPATargets: func(ctx context.Context, ns string) (map[collector.WorkloadKey]string, error) {
+				return vpa.Targets(ctx, k, ns)
+			}}
 		mgr := &capacity.Manager{K: k, Log: log, Cfg: capDef}
 		mgr.Cfg.DryRun, mgr.Cfg.ExternalAutoscaler = *arDryRun, *extAutoscaler
 		if *awsCluster != "" {

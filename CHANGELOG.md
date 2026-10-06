@@ -3,6 +3,28 @@
 All notable changes to APVA. Versions follow [semantic versioning](https://semver.org);
 before v1.0, minor versions may change behaviour.
 
+## v0.5.0 — VPA recommender (unreleased)
+
+### Added
+- **APVA as a Vertical Pod Autoscaler custom recommender** (`--vpa-recommender`, Helm
+  `vpaRecommender.enabled`). For VPAs that set `spec.recommenders: [{name: apva}]`, APVA
+  writes `status.recommendation`: per-container target, bounds and uncapped target, with
+  the traffic-aware hold, VPA container policies honoured, and `RecommendationProvided` /
+  `LowConfidence` conditions. The VPA's updater and admission controller apply it. No VPA
+  change needed (AEP-3919). Discussion:
+  [kubernetes/autoscaler#10395](https://github.com/kubernetes/autoscaler/issues/10395).
+  See [docs/vpa.md](docs/vpa.md).
+- `apva-vpa-recommender` role: list VPAs, patch only `verticalpodautoscalers/status`, get
+  deployments/statefulsets; namespaced when `analysis.namespaces` is set.
+- VPA recommender end-to-end test (`make e2e-vpa`): Kubernetes 1.35, KWOK, the real VPA
+  CRD, APVA as its own ServiceAccount.
+- The dashboard's activity feed shows VPA status writes.
+
+### Changed
+- Auto-resize **skips every workload targeted by a VerticalPodAutoscaler**, whichever
+  recommender it uses, so the two never resize the same pods. The resizer role gets
+  `list verticalpodautoscalers` for this.
+
 ## v0.4.0 — In-place resize and least privilege (unreleased)
 
 ### Added

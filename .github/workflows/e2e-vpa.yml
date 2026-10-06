@@ -1,0 +1,47 @@
+# Copyright 2026 Raghav Gade
+# SPDX-License-Identifier: Apache-2.0
+#
+# APVA as a VerticalPodAutoscaler custom recommender (kubernetes/autoscaler#10395): a real
+# Kubernetes 1.35 control plane (k3s with no agent), KWOK simulating nodes and pods, the
+# real VPA CRD, and a fake Prometheus. APVA runs as its own ServiceAccount with the chart's
+# RBAC: it must write status.recommendation for VPAs that name it, leave default-recommender
+# VPAs alone, never resize VPA-targeted workloads itself, and be unable to change VPA specs.
+name: E2E (VPA recommender)
+on:
+  push: {branches: [main]}
+  pull_request:
+  workflow_dispatch:
+permissions: {contents: read}
+env:
+  K3S_VERSION: v1.35.2+k3s1
+  KWOK_VERSION: v0.7.0
+  VPA_VERSION: 1.8.0
+jobs:
+  vpa-recommender:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version-file: go.mod}
+      - uses: azure/setup-helm@v4
+      - name: Start a Kubernetes control plane (k3s, no kubelet)
+        run: |
+          curl -fsSL -o k3s "https://github.com/k3s-io/k3s/releases/download/${K3S_VERSION/+/%2B}/k3s"
+          chmod +x k3s
+          sudo ./k3s server --disable-agent --write-kubeconfig-mode 644 \
+            --disable=traefik,servicelb,metrics-server,local-storage,coredns >k3s.log 2>&1 &
+          for i in $(seq 60); do sudo ./k3s kubectl get --raw /readyz >/dev/null 2>&1 && break; sleep 2; done
+          echo "KUBECONFIG=/etc/rancher/k3s/k3s.yaml" >> "$GITHUB_ENV"
+      - name: Start KWOK (simulated nodes and pods)
+        run: |
+          base=https://github.com/kubernetes-sigs/kwok/releases/download/$KWOK_VERSION
+          curl -fsSL -o kwok "$base/kwok-linux-amd64" && chmod +x kwok
+          ./test/e2e-aws/kwok-stages.sh "$KWOK_VERSION" > stages.yaml
+          ./kwok --kubeconfig=/etc/rancher/k3s/k3s.yaml --manage-all-nodes=false \
+            --manage-nodes-with-annotation-selector=kwok.x-k8s.io/node=fake --config=stages.yaml >kwok.log 2>&1 &
+      - name: Run VPA recommender end-to-end test
+        run: ./test/e2e-vpa/run.sh
+      - name: Logs on failure
+        if: failure()
+        run: tail -50 k3s.log kwok.log || true

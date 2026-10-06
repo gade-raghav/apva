@@ -6,7 +6,7 @@
 It talks to a REAL Kubernetes API (via `kubectl proxy`): UpdateNodegroupConfig creates
 KWOK nodes labelled eks.amazonaws.com/nodegroup=gpu, TerminateInstanceInAutoScalingGroup
 deletes exactly that node. Prometheus answers are computed from the live pods and the
-usage the test sets through /control/usage.
+usage the test sets through /control/usage (cpu in cores, mem in MiB, per workload).
 """
 import json, re, sys, threading, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -115,7 +115,9 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, b"<TerminateInstanceInAutoScalingGroupResponse/>", "text/xml")
             if u.path == "/control/usage":
                 q = parse_qs(u.query)
-                usage.setdefault(q["workload"][0], {})["cpu"] = float(q["cpu"][0])
+                u = usage.setdefault(q["workload"][0], {})
+                if "cpu" in q: u["cpu"] = float(q["cpu"][0])
+                if "mem" in q: u["mem"] = float(q["mem"][0]) * 2**20  # MiB
                 return self.send(200, usage)
             if u.path == "/control/min":
                 ng["scalingConfig"]["minSize"] = int(parse_qs(u.query)["value"][0])
